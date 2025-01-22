@@ -4,9 +4,9 @@
 #define _FLOWPERF_H_
 
 
-/* State machine of flowperf server handle per client connection */
+/* State machine of flowperf per-client handle on the server */
 
-#define SERVER_HANDLE_STATE_ACCEPTING	1
+#define CLIENT_HANDLE_STATE_ACCEPTING	1
 /* The initial state, waiting for a new client TCP connection by posting
  * an ACCEPT event.
  *
@@ -14,7 +14,7 @@
  * - EVENT_TYPE_ACCEPT: Change state to ACCEPTED, and post EVENT_TYPE_READ.
  */
 
-#define SERVER_HANDLE_STATE_ACCEPTED	2
+#define CLIENT_HANDLE_STATE_ACCEPTED	2
 /* Stable state. A client TCP connection is accpeted, and waiting for
  * an RPC request by posting a READ event.
  *
@@ -23,7 +23,7 @@
  *   the RPC request read from the socket.
  */
 
-#define SERVER_HANDLE_STATE_FLOWING	3
+#define CLIENT_HANDLE_STATE_FLOWING	3
 /* Sending flow. Write data to the client socket until
  * start_flow->size bytes transferred.
  *
@@ -34,7 +34,7 @@
  * After the flow transferred, change the state to ACCEPTED or TCP_INFO.
  */
 
-#define SERVER_HANDLE_STATE_TCP_INFO	4
+#define CLIENT_HANDLE_STATE_TCP_INFO	4
 /* Sending struct tcp_info of this client socket.
  * 
  * Assumed Completion Event:
@@ -46,9 +46,9 @@
 
 
 
-/* State machine of flowperf client handle per connection */
+/* State machine of flowperf connection handle on the client */
 
-#define CLIENT_HANDLE_STATE_CONNECTING	1
+#define CONNECTION_HANDLE_STATE_CONNECTING	1
 /* Initial state. The TCP connection is now connecting.
  *
  * Assumed Completion Event:
@@ -58,7 +58,7 @@
  * REQ_TYPE_START_FLOW.
  */
 
-#define CLIENT_HANDLE_STATE_FLOWING	2
+#define CONNECTION_HANDLE_STATE_FLOWING	2
 /* Benchmarking, receving data from the socket.
  *
  * Assumed Completion Event:
@@ -68,7 +68,7 @@
  *  by sending TCP_INFO or to WAIT
  */
    
-#define CLIENT_HANDLE_STATE_TCP_INFO	3
+#define CONNECTION_HANDLE_STATE_TCP_INFO	3
 /* Receving struct tcp_info
  *
  * Assumed Completion Event:
@@ -78,7 +78,7 @@
  * or to WAIT.
  */
 
-#define CLIENT_HANDLE_STATE_WAIT	4
+#define CONNECTION_HANDLE_STATE_WAIT	4
 /* Sleep a while as flow interval gap time.
  *
  * Assumed Compeltion Event:
@@ -105,6 +105,9 @@ enum {
 
         REQ_TYPE_TCP_INFO       = 2,
         REP_TYPE_TCP_INFO       = 3,
+
+	REP_TYPE_ERROR		= 0xF0,
+	REP_TYPE_INVALID_REQUEST	= 0xF1,
 };
 
 struct rpchdr {
@@ -116,12 +119,12 @@ struct rpchdr {
 struct rpc_start_flow {
 	struct rpchdr	hdr;
         uint32_t        bytes;  /* flow size (bytes) */
-};
+} __attribute__((__packed__));
 
 struct rpc_tcp_info {
 	struct rpchdr	hdr;
 	/* no payload */
-};
+} __attribute__((__packed__));
 
 
 

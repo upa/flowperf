@@ -16,6 +16,7 @@ static void usage()
 	       "    -p PORT         port number\n"
 	       "    -q QUEUE_DEPTH  iouring queue depth\n"
 	       "    -b BUF_SIZE     buffer size for each handle\n"
+	       "    -B BATCH_SIZE   batch size for processing io uring\n"
 	       "    -v              increment verbose output level\n"
 	       "    -h              print this help\n"
 	       "\n"
@@ -34,8 +35,9 @@ static int parse_args(int argc, char **argv, struct opts *o)
 	o->queue_depth = DEFAULT_QUEUE_DEPTH;
 	o->severity = SEVERITY_WARN;
 	o->buf_sz = DEFAULT_HANDLE_BUF_SZ;
+	o->batch_sz = DEFAULT_BATCH_SIZE;
 
-	while ((ch = getopt(argc, argv, "scp:q:b:vha:")) != -1) {
+	while ((ch = getopt(argc, argv, "scp:q:b:B:vha:")) != -1) {
 		switch (ch) {
 		case 's':
 			o->mode = MODE_SERVER;
@@ -51,13 +53,24 @@ static int parse_args(int argc, char **argv, struct opts *o)
 			break;
 		case 'b':
 			o->buf_sz = atoi(optarg);
+			if (o->buf_sz < 4096) {
+				pr_err("too small size: %s", optarg);
+				return -1;
+			}
+			break;
+		case 'B':
+			o->batch_sz = atoi(optarg);
+			if (o->batch_sz < 1 || DEFAULT_QUEUE_DEPTH < o->batch_sz) {
+				pr_err("invalid batch size: %s", optarg);
+				return -1;
+			}
 			break;
 		case 'v':
 			o->severity++;
 			break;
 		case 'h':
 			usage();
-			return 0;
+			return -1;
 		case 'a':
 			o->local_addr = optarg;
 			break;
@@ -66,6 +79,13 @@ static int parse_args(int argc, char **argv, struct opts *o)
 			return -1;
 		}
 	}
+
+	/* validate */
+	if (o->queue_depth < o->batch_sz) {
+		pr_err("batch size must be less than queue depth");
+		return -1;
+	}
+
 	return 0;
 }
 

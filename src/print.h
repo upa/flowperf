@@ -27,10 +27,16 @@ int get_print_severity();
 #define pr_warn(fmt, ...) \
 	__print(stderr, SEVERITY_WARN, "\e[33m[WARN]\e[m", fmt, ##__VA_ARGS__)
 #define pr_notice(fmt, ...) \
-	__print(stderr, SEVERITY_NOTICE, "\e[35m[NOTICE]\e[m]", fmt, ##__VA_ARGS__)
+	__print(stderr, SEVERITY_NOTICE, "\e[35m[NOTICE]\e[m", fmt, ##__VA_ARGS__)
 #define pr_info(fmt, ...) \
-	__print(stderr, SEVERITY_INFO, "[INFO]", fmt, ##__VA_ARGS__)
+	__print(stderr, SEVERITY_INFO, "\e[32m[INFO]\e[m", fmt, ##__VA_ARGS__)
 #define pr_debug(fmt, ...) \
-	__print(stderr, SEVERITY_DEBUG, "[DEBUG]", fmt, ##__VA_ARGS__)
+	__print(stderr, SEVERITY_DEBUG, "\e[34m[DEBUG]\e[m", fmt, ##__VA_ARGS__)
+
+
+#define is_pr_notice() (get_print_severity() >= SEVERITY_NOTICE)
+#define is_pr_info() (get_print_severity() >= SEVERITY_INFO)
+#define is_pr_debug() (get_print_severity() >= SEVERITY_DEBUG)
+
 
 #endif /* _PRINT_H_ */

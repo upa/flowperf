@@ -16,6 +16,7 @@
 #define DEFAULT_PORT		"9999"
 #define DEFAULT_QUEUE_DEPTH	512
 #define DEFAULT_HANDLE_BUF_SZ	(1 << 20)	/* 1MB */
+#define DEFAULT_BATCH_SIZE	32
 
 
 /* flowperf command line options */
@@ -27,10 +28,10 @@ struct opts {
 	int	queue_depth;
 	int 	severity;
 	int 	buf_sz;
+	int 	batch_sz;
 
 	/* server options */
 	char	*local_addr;
-
 };
 
 
