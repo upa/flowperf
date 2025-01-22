@@ -234,12 +234,19 @@ static void process_client_handle_accepted(struct client_handle *ch,
 {
 	struct rpchdr *hdr;
 
-	if (ch->event != EVENT_TYPE_READ) {
+	if (ch->event != EVENT_TYPE_WRITE && ch->event != EVENT_TYPE_READ) {
 		pr_err("invalid state/event pair: state=%d event=%d",
 		       ch->state, ch->event);
 		return;
 	}
 
+	if (ch->event == EVENT_TYPE_WRITE) {
+		/* error has been sent. put a read event for the next request */
+		put_read(ch);
+		return;
+	}
+
+	/* here we assume EVENT_TYPE_READ */
 	if (cqe->res < 0) {
 		pr_warn("%s: read: %s, connection closed",
 			sockaddr_ntoa(&ch->addr), strerror(-cqe->res));
@@ -267,7 +274,10 @@ static void process_client_handle_accepted(struct client_handle *ch,
 		move_client_handle_tcp_info(ch, (struct rpc_tcp_info *)hdr);
 		break;
 	default:
-		pr_notice("invalid rpchdr type: %u", hdr->type);
+		/* send error to the client */
+		pr_warn("invalid hdr type: %u", hdr->type);
+		hdr->type = REP_TYPE_INVALID_REQUEST;
+		put_write(ch, sizeof(*hdr));
 	}
 
 	return;
@@ -354,21 +364,15 @@ static int server_loop(void)
 }
 
 
-static void cleanup(void) {
+static void sigint_handler(int signo) {
+    pr_notice("^C pressed. Shutting down.");
     close(serv.sock);
     io_uring_queue_exit(ring);
-}
-
-static void sigint_handler(int signo) {
-    pr_notice("^C pressed. Shutting down.\n");
-    cleanup();
 }
 
 
 int start_server(struct opts *o)
 {
-	int ret;
-
 	if (init_serv_socket(o) < 0)
 		return -1;
 
@@ -377,9 +381,6 @@ int start_server(struct opts *o)
 
 	signal(SIGINT, sigint_handler);
 
-	ret = server_loop();
-
-	cleanup();
-	return ret;
+	return server_loop();
 }
 
