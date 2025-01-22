@@ -9,7 +9,9 @@
 
 #include <liburing.h>
 
+#include <flowperf.h>
 #include <opts.h>
+#include <util.h>
 
 struct server {
 	int 	sock;
@@ -19,6 +21,7 @@ struct server {
 };
 
 struct server serv;
+struct io_uring *ring = &serv.ring;
 
 
 struct client_handle {
@@ -27,11 +30,14 @@ struct client_handle {
 	struct sockaddr_storage addr;	/* client address */
 	socklen_t addr_len;
 
-	int 		state;
+	/* state and uring even type */
+	int 	state;
+	int	event;
 
 	/* fields for an RPC transaction */
-	char		*buf;
-	uint64_t	remain_bytes;	/* remain bytes to be xmitted */
+	void	*buf;
+	size_t	buf_sz;
+	size_t	remain_bytes;	/* remain bytes to be xmitted */
 	struct timespec start, end;
 };
 
@@ -94,7 +100,7 @@ static int init_serv_io_uring(struct opts *o)
 {
 	int ret;
 
-	ret = io_uring_queue_init(o->queue_depth, &serv.ring, 0);
+	ret = io_uring_queue_init(o->queue_depth, ring, 0);
 	if (ret < 0) {
 		pr_err("io_uring_queue_init: %s", strerror(-ret));
 		return -1;
@@ -104,15 +110,64 @@ static int init_serv_io_uring(struct opts *o)
 }
 
 
+/* client handle processing */
+
+
+static int put_accept(void)
+{
+	make_sure_sq_is_available(ring);
+	struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
+	struct client_handle *ch;
+
+	/* put a new client handle instance */
+	if ((ch = malloc(sizeof(*ch))) == NULL) {
+		pr_err("malloc: %s", strerror(errno));
+		return -1;
+	}
+	memset(ch, 0, sizeof(*ch));
+	ch->state = SERVER_HANDLE_STATE_ACCEPTING;
+	ch->event = EVENT_TYPE_ACCEPT;
+
+	io_uring_prep_accept(sqe, serv.sock, (struct sockaddr *)&ch->addr,
+			     (socklen_t *)&ch->addr_len, 0);
+	io_uring_sqe_set_data(sqe, ch);
+
+	return 0;
+}
+
+static int put_read(struct client_handle *ch)
+{
+	make_sure_sq_is_available(ring);
+	struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
+
+	ch->event = EVENT_TYPE_READ;
+	io_uring_prep_read(sqe, ch->sock, ch->buf, ch->buf_sz, 0);
+	io_uring_sqe_set_data(sqe, ch);
+	return 0;
+}
+
+static int put_write(struct client_handle *ch, size_t len)
+{
+	make_sure_sq_is_available(ring);
+	struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
+	ch->event = EVENT_TYPE_WRITE;
+	io_uring_prep_write(sqe, ch->sock, ch->buf, len, 0);
+	io_uring_sqe_set_data(sqe, ch);
+	return 0;
+}
+
+
+
 static void cleanup(void) {
     close(serv.sock);
-    io_uring_queue_exit(&serv.ring);
+    io_uring_queue_exit(ring);
 }
 
 static void sigint_handler(int signo) {
     pr_notice("^C pressed. Shutting down.\n");
     cleanup();
 }
+
 
 int start_server(struct opts *o)
 {

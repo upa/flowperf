@@ -107,19 +107,19 @@ enum {
         REP_TYPE_TCP_INFO       = 3,
 };
 
-struct rpc_hdr {
+struct rpchdr {
 	/* header for an RPC request from client to server */
 	uint8_t         type;
         uint16_t        len;
 } __attribute__((__packed__));
 
 struct rpc_start_flow {
-	struct req_hdr	hdr;
+	struct rpchdr	hdr;
         uint32_t        bytes;  /* flow size (bytes) */
 };
 
 struct rpc_tcp_info {
-	struct req_hdr	hdr;
+	struct rpchdr	hdr;
 	/* no payload */
 };
 
