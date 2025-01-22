@@ -16,6 +16,7 @@
 
 struct server {
 	int 	sock;
+	bool	run;
 	struct opts *o;
 
 	struct io_uring ring;
@@ -43,13 +44,10 @@ struct client_handle {
 };
 
 
-static int init_serv_socket(struct opts *o)
+static int init_serv_socket()
 {
 	struct addrinfo hints, *res, *rp;
 	int ret;
-
-	memset(&serv, 0, sizeof(serv));
-	serv.o = o;
 
 	/* create tcp server socket */
 	memset(&hints, 0, sizeof(hints));
@@ -101,11 +99,11 @@ static int init_serv_socket(struct opts *o)
 	return 0;
 }
 
-static int init_serv_io_uring(struct opts *o)
+static int init_serv_io_uring()
 {
 	int ret;
 
-	ret = io_uring_queue_init(o->queue_depth, ring, 0);
+	ret = io_uring_queue_init(serv.o->queue_depth, ring, 0);
 	if (ret < 0) {
 		pr_err("io_uring_queue_init: %s", strerror(-ret));
 		return -1;
@@ -339,7 +337,7 @@ static int server_loop(void)
 	}
 
 	pr_notice("start the server loop");
-	while (1) {
+	while (serv.run) {
 		nr_cqes = io_uring_peek_batch_cqe(ring, cqes, serv.o->batch_sz);
 		if (nr_cqes == 0) {
 			if ((ret = io_uring_wait_cqe(ring, &cqes[0])) < 0) {
@@ -366,6 +364,7 @@ static int server_loop(void)
 
 static void sigint_handler(int signo) {
     pr_notice("^C pressed. Shutting down.");
+    serv.run = false;
     close(serv.sock);
     io_uring_queue_exit(ring);
 }
@@ -373,10 +372,14 @@ static void sigint_handler(int signo) {
 
 int start_server(struct opts *o)
 {
-	if (init_serv_socket(o) < 0)
+	memset(&serv, 0, sizeof(serv));
+	serv.run = true;
+	serv.o = o;
+
+	if (init_serv_socket() < 0)
 		return -1;
 
-	if (init_serv_io_uring(o) < 0)
+	if (init_serv_io_uring() < 0)
 		return -1;
 
 	signal(SIGINT, sigint_handler);
