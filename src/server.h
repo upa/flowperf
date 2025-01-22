@@ -1,0 +1,8 @@
+#ifndef _SERVER_H_
+#define _SERVER_H_
+
+#include <opts.h>
+
+int start_server(struct opts *o);
+
+#endif /* _SERVER_H_ */
