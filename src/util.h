@@ -12,11 +12,9 @@
 # define likely(x)	__builtin_expect(!!(x), 1)
 # define unlikely(x)	__builtin_expect(!!(x), 0)
 
-#define make_sure_sq_is_available(ring)					\
-	do {								\
-		if (unlikely(io_uring_sq_space_left(ring) == 0))	\
-			io_uring_submit_and_wait(ring, 2);		\
-	} while (0)
+
+/* check one sqe exists before get sqe */
+struct io_uring_sqe *io_uring_get_sqe_always(struct io_uring *ring);
 
 
 /* convert sockaddr to ADDR:PORT string onto buf */

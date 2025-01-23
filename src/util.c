@@ -4,9 +4,17 @@
 #include <sys/socket.h>
 #include <netdb.h>
 #include <arpa/inet.h>
+#include <liburing.h>
 
 #include <util.h>
 #include <print.h>
+
+struct io_uring_sqe *io_uring_get_sqe_always(struct io_uring *ring)
+{
+	if (unlikely(io_uring_sq_space_left(ring) == 0))
+		io_uring_submit_and_wait(ring, 1);
+	return io_uring_get_sqe(ring);
+}
 
 void sockaddr_ntop(struct sockaddr_storage *ss, char *buf, socklen_t size)
 {
