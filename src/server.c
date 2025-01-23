@@ -214,6 +214,10 @@ static void process_client_handle_accepting(struct client_handle *ch,
 	pr_info("%s: new connection accepted", ch->addrstr);
 
 	ch->sock = cqe->res;
+	int v = 1;
+	if (setsockopt(ch->sock, SOL_TCP, TCP_NODELAY, &v, sizeof(v)) < 0)
+		pr_warn("%s: setoskcopt(TCP_NODELAY): %s", ch->addrstr, strerror(errno));
+
 	ch->state = CLIENT_HANDLE_STATE_ACCEPTED;
 	put_read(ch);
 

@@ -3,6 +3,7 @@
 #include <opts.h>
 #include <print.h>
 
+
 static void usage()
 {
 	printf("flowperf: performance measurement for flow completion times\n"
@@ -26,6 +27,9 @@ static void usage()
 		);
 }
 
+
+static char _default_local_addr[] = DEFAULT_LOCAL_ADDR;
+
 static int parse_args(int argc, char **argv, struct opts *o)
 {
 	int ch;
@@ -36,6 +40,7 @@ static int parse_args(int argc, char **argv, struct opts *o)
 	o->severity = SEVERITY_WARN;
 	o->buf_sz = DEFAULT_HANDLE_BUF_SZ;
 	o->batch_sz = DEFAULT_BATCH_SIZE;
+	o->local_addr = _default_local_addr;
 
 	while ((ch = getopt(argc, argv, "scp:q:b:B:vha:")) != -1) {
 		switch (ch) {

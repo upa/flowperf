@@ -18,6 +18,8 @@
 #define DEFAULT_HANDLE_BUF_SZ	(1 << 18)	/* 256KB */
 #define DEFAULT_BATCH_SIZE	32
 
+#define DEFAULT_LOCAL_ADDR	"::" /* in6-addr-any can handle both v6 and v4 */
+
 /* flowperf command line options */
 struct opts {
 	/* common options for both server and client modes */
