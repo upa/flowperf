@@ -39,7 +39,7 @@ struct client_handle {
 	/* fields for an RPC transaction */
 	void	*buf;
 	size_t	buf_sz;
-	size_t	remain_bytes;	/* remain bytes to be xmitted */
+	ssize_t	remain_bytes;	/* remain bytes to be xmitted */
 	struct timespec start, end;
 };
 
@@ -158,15 +158,23 @@ static void put_read(struct client_handle *ch)
 	io_uring_sqe_set_data(sqe, ch);
 }
 
-static void put_write(struct client_handle *ch, size_t len)
+static void put_write(struct client_handle *ch, size_t buf_offset, size_t len)
 {
 	make_sure_sq_is_available(ring);
 	struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
 	ch->event = EVENT_TYPE_WRITE;
-	io_uring_prep_write(sqe, ch->sock, ch->buf, len, 0);
+	io_uring_prep_write(sqe, ch->sock, ch->buf + buf_offset, len, 0);
 	io_uring_sqe_set_data(sqe, ch);
 }
 
+
+static void purge_client_handle(struct client_handle *ch)
+{
+	pr_debug("purge client handle %s", sockaddr_ntoa(&ch->addr));
+	if (ch->sock > 1)
+		close(ch->sock);
+	free(ch);
+}
 
 static void process_client_handle_accepting(struct client_handle *ch,
 					    struct io_uring_cqe *cqe)
@@ -174,15 +182,18 @@ static void process_client_handle_accepting(struct client_handle *ch,
 	if (ch->event != EVENT_TYPE_ACCEPT) {
 		pr_err("invalid state/event pair: state=%d event=%d",
 		       ch->state, ch->event);
+		purge_client_handle(ch);
 		return;
 	}
 
 	/* handle is ACCEPTING, and accept event completed. The next
 	 * state is ACCEPTED, and put a read event for waiting an RPC
-	 * request.
+	 * request. In addition, put a new accept event for a next
+	 * incomming connection.
 	 */
 	if (cqe->res < 0) {
 		pr_warn("accept: %s", strerror(-cqe->res));
+		purge_client_handle(ch);
 		goto put_next_accept;
 	}
 	pr_info("%s: new connection accepted", sockaddr_ntoa(&ch->addr));
@@ -204,7 +215,7 @@ void move_client_handle_flowing(struct client_handle *ch, struct rpc_start_flow 
 	ch->state = CLIENT_HANDLE_STATE_FLOWING;
 	ch->event = EVENT_TYPE_WRITE;
 	ch->remain_bytes = htonl(rpc->bytes);
-	put_write(ch, min(ch->remain_bytes, ch->buf_sz));
+	put_write(ch, 0, min(ch->remain_bytes, ch->buf_sz));
 }
 
 void move_client_handle_tcp_info(struct client_handle *ch, struct rpc_tcp_info *rpc)
@@ -224,7 +235,7 @@ void move_client_handle_tcp_info(struct client_handle *ch, struct rpc_tcp_info *
 	ch->state = CLIENT_HANDLE_STATE_TCP_INFO;
 	ch->event = EVENT_TYPE_WRITE;
 	ch->remain_bytes = sizeof(info);
-	put_write(ch, min(ch->remain_bytes, ch->buf_sz));
+	put_write(ch, 0, min(ch->remain_bytes, ch->buf_sz));
 }
 
 static void process_client_handle_accepted(struct client_handle *ch,
@@ -235,6 +246,7 @@ static void process_client_handle_accepted(struct client_handle *ch,
 	if (ch->event != EVENT_TYPE_WRITE && ch->event != EVENT_TYPE_READ) {
 		pr_err("invalid state/event pair: state=%d event=%d",
 		       ch->state, ch->event);
+		purge_client_handle(ch);
 		return;
 	}
 
@@ -260,8 +272,8 @@ static void process_client_handle_accepted(struct client_handle *ch,
 		goto close;
 	}
 
-	/* handle is ACCPETED, and read event completed, which means
-	 * a new RPC request has come. Process it.
+	/* handle is ACCPETED, and read event occurs, which means a
+	 * new RPC request has come. Process it.
 	 */
 	hdr = (struct rpchdr *)ch->buf;
 	switch (hdr->type) {
@@ -273,28 +285,89 @@ static void process_client_handle_accepted(struct client_handle *ch,
 		break;
 	default:
 		/* send error to the client */
-		pr_warn("invalid hdr type: %u", hdr->type);
+		pr_warn("%s: invalid hdr type: %u", sockaddr_ntoa(&ch->addr), hdr->type);
 		hdr->type = REP_TYPE_INVALID_REQUEST;
-		put_write(ch, sizeof(*hdr));
+		put_write(ch, 0, sizeof(*hdr));
 	}
 
 	return;
 
 close:
-	close(ch->sock);
-	free(ch);
+	purge_client_handle(ch);
 }
 
 static void process_client_handle_flowing(struct client_handle *ch,
 					  struct io_uring_cqe *cqe)
 {
-	
+	if (ch->event != EVENT_TYPE_WRITE) {
+		pr_err("invalid state/event pair: state=%d event=%d",
+		       ch->state, ch->event);
+		goto close;
+	}
+
+	/* handle is FLOWING. A write event done. Put a new write if
+	 * bytes to be transfered remain, or change the state to the
+	 * ACCEPTED if all bytes have been transmitted.
+	 */
+	if (cqe->res < 0) {
+		pr_notice("%s: wirte: %s, close connection",
+			  sockaddr_ntoa(&ch->addr), strerror(-cqe->res));
+		goto close;
+	}
+
+	ch->remain_bytes -= cqe->res;
+
+	if (ch->remain_bytes > 0) {
+		/* we need to send more bytes */
+		put_write(ch, 0, min(ch->remain_bytes, ch->buf_sz));
+	} else {
+		/* all bytes transfered */
+		pr_debug("%s: RPC FLOW finished", sockaddr_ntoa(&ch->addr));
+		ch->state = CLIENT_HANDLE_STATE_ACCEPTED;
+		put_read(ch);
+	}
+
+	return;
+
+close:
+	purge_client_handle(ch);
 }
 
 static void process_client_handle_tcp_info(struct client_handle *ch,
 					   struct io_uring_cqe *cqe)
 {
+	if (ch->event != EVENT_TYPE_WRITE) {
+		pr_err("invalid state/event pair: state=%d event=%d",
+		       ch->state, ch->event);
+		goto close;
+	}
 	
+	/* handle is TCP_INFO, we are now sending tcp_info structure
+	 * on ch->buf. Put a new write if retval of the last write is
+	 * less than the size of tcp_info. Otherwise, change the state
+	 * to ACCEPTED.
+	 */
+
+	if (cqe->res < 0) {
+		pr_notice("%s: wirte: %s, close connection",
+			  sockaddr_ntoa(&ch->addr), strerror(-cqe->res));
+		goto close;
+	}
+
+	ch->remain_bytes -= cqe->res;
+
+	if (ch->remain_bytes > 0) {
+		put_write(ch, cqe->res, min(ch->remain_bytes, ch->buf_sz));
+	} else {
+		/* all bytes transferred */
+		pr_debug("%s: RPC TCP_INFO finished", sockaddr_ntoa(&ch->addr));
+		ch->state = CLIENT_HANDLE_STATE_ACCEPTED;
+		put_read(ch);
+	}
+	return;
+
+close:
+	purge_client_handle(ch);
 }
 
 
@@ -317,6 +390,7 @@ static int process_client_cqe(struct io_uring_cqe *cqe)
 		break;
 	default:
 		pr_err("invalid client handle state: %d", ch->state);
+		purge_client_handle(ch);
 	}
 
 	return 0;
