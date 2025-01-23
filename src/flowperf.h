@@ -96,35 +96,24 @@
 
 
 
-/* RPC message format */
+/* RPC Request Format. */
+#define RPC_REQ_START_FLOW	"F"
+/* "F [FLOW_SIZE]"
+ *
+ * Server returns FLOW_SIZE bytes
+ */
 
-enum {
-        REQ_TYPE_NONE           = 0,
+#define RPC_REQ_TCP_INFO	"T"
+/* "T"
+ *
+ * Server returns tcp_info in "key=value key=value ...\n" string.
+ * The string is terminated by '\n'
+ */
 
-        REQ_TYPE_START_FLOW     = 1,
-
-        REQ_TYPE_TCP_INFO       = 2,
-        REP_TYPE_TCP_INFO       = 3,
-
-	REP_TYPE_ERROR		= 0xF0,
-	REP_TYPE_INVALID_REQUEST	= 0xF1,
-};
-
-struct rpchdr {
-	/* header for an RPC request from client to server */
-	uint8_t         type;
-} __attribute__((__packed__));
-
-struct rpc_start_flow {
-	struct rpchdr	hdr;
-        uint32_t        bytes;  /* flow size (bytes) */
-} __attribute__((__packed__));
-
-struct rpc_tcp_info {
-	struct rpchdr	hdr;
-	/* no payload */
-} __attribute__((__packed__));
-
-
+#define RPC_REP_INVALID		"I"	/* I */
+/* "I"
+ *
+ * Server returns 'I' if RPC REQ is invalid.
+ */
 
 #endif /* _FLOWPERF_H_ */

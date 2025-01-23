@@ -22,4 +22,11 @@
 void sockaddr_ntop(struct sockaddr_storage *ss, char *buf, socklen_t size);
 char *sockaddr_ntoa(struct sockaddr_storage *ss);
 
+
+/* tcp_info */
+#include <linux/tcp.h>
+
+/* put key=value ... string of tcp_info onto buf */
+int build_tcp_info_string(struct tcp_info *info, char *buf, size_t size);
+
 #endif

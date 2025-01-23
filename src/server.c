@@ -26,6 +26,8 @@ struct server serv;
 struct io_uring *ring = &serv.ring;
 
 
+#define RECV_BUF_SZ	4096
+
 struct client_handle {
 	/* a handle for a client connection */
 	int	sock;
@@ -37,9 +39,12 @@ struct client_handle {
 	int	event;
 
 	/* fields for an RPC transaction */
+	char	recvbuf[RECV_BUF_SZ];
+
 	void	*buf;
 	size_t	buf_sz;
 	ssize_t	remain_bytes;	/* remain bytes to be xmitted */
+
 	struct timespec start, end;
 };
 
@@ -136,6 +141,7 @@ static int put_accept(void)
 		return -1;
 	}
 	ch->buf_sz = serv.o->buf_sz;
+	memset(ch->buf, 'x', serv.o->buf_sz);
 
 	ch->state = CLIENT_HANDLE_STATE_ACCEPTING;
 	ch->event = EVENT_TYPE_ACCEPT;
@@ -152,9 +158,9 @@ static void put_read(struct client_handle *ch)
 {
 	make_sure_sq_is_available(ring);
 	struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
-
+	memset(ch->recvbuf, 0, sizeof(RECV_BUF_SZ));
 	ch->event = EVENT_TYPE_READ;
-	io_uring_prep_read(sqe, ch->sock, ch->buf, ch->buf_sz, 0);
+	io_uring_prep_read(sqe, ch->sock, ch->recvbuf, RECV_BUF_SZ, 0);
 	io_uring_sqe_set_data(sqe, ch);
 }
 
@@ -200,49 +206,50 @@ static void process_client_handle_accepting(struct client_handle *ch,
 
 	ch->sock = cqe->res;
 	ch->state = CLIENT_HANDLE_STATE_ACCEPTED;
-	ch->event = EVENT_TYPE_READ;
 	put_read(ch);
 
 put_next_accept:
 	put_accept();
 }
 
-void move_client_handle_flowing(struct client_handle *ch, struct rpc_start_flow *rpc)
+void move_client_handle_flowing(struct client_handle *ch, ssize_t bytes)
 {
 	/* start RPC FLOWING */
-	pr_debug("%s: RPC FLOW start", sockaddr_ntoa(&ch->addr));
-
+	pr_debug("%s: %s", sockaddr_ntoa(&ch->addr), ch->recvbuf);
 	ch->state = CLIENT_HANDLE_STATE_FLOWING;
-	ch->event = EVENT_TYPE_WRITE;
-	ch->remain_bytes = htonl(rpc->bytes);
+	ch->remain_bytes = bytes;
 	put_write(ch, 0, min(ch->remain_bytes, ch->buf_sz));
 }
 
-void move_client_handle_tcp_info(struct client_handle *ch, struct rpc_tcp_info *rpc)
+void move_client_handle_tcp_info(struct client_handle *ch)
 {
 	/* Start RPC TCP_INFO */
 	struct tcp_info info;
 	socklen_t infolen = sizeof(info);
+	int ret;
 
-	pr_debug("%s: RPC TCP_INFO start", sockaddr_ntoa(&ch->addr));
+	pr_debug("%s: %s", sockaddr_ntoa(&ch->addr), ch->recvbuf);
 
 	if (getsockopt(ch->sock, IPPROTO_TCP, TCP_INFO, &info, &infolen) < 0) {
 		pr_warn("getsockopt(TCP_INFO): %s", strerror(errno));
 		memset(&info, 0, sizeof(info)); /* zero fill */
 	}
 
-	memcpy(ch->buf, &info, sizeof(info));
+	ret = build_tcp_info_string(&info, ch->buf, ch->buf_sz);
+	if (ret < 0 ||ch->buf_sz <= ret) {
+		pr_err("build_tcp_info_string failed: %d", ret);
+		snprintf(ch->buf, ch->buf_sz, "%s\n", RPC_REP_INVALID);
+		put_write(ch, 0, strlen(ch->buf));
+	}
+
 	ch->state = CLIENT_HANDLE_STATE_TCP_INFO;
-	ch->event = EVENT_TYPE_WRITE;
-	ch->remain_bytes = sizeof(info);
+	ch->remain_bytes = ret;
 	put_write(ch, 0, min(ch->remain_bytes, ch->buf_sz));
 }
 
 static void process_client_handle_accepted(struct client_handle *ch,
 					   struct io_uring_cqe *cqe)
 {
-	struct rpchdr *hdr;
-
 	if (ch->event != EVENT_TYPE_WRITE && ch->event != EVENT_TYPE_READ) {
 		pr_err("invalid state/event pair: state=%d event=%d",
 		       ch->state, ch->event);
@@ -266,28 +273,22 @@ static void process_client_handle_accepted(struct client_handle *ch,
 		pr_info("%s: connection closed", sockaddr_ntoa(&ch->addr));
 		goto close;
 	}
-	if (cqe->res < sizeof(struct rpchdr)) {
-		pr_warn("%s: too short request, connection closed",
-			sockaddr_ntoa(&ch->addr));
-		goto close;
-	}
+
+	ch->recvbuf[RECV_BUF_SZ-1] = '\0';
 
 	/* handle is ACCPETED, and read event occurs, which means a
 	 * new RPC request has come. Process it.
 	 */
-	hdr = (struct rpchdr *)ch->buf;
-	switch (hdr->type) {
-	case REQ_TYPE_START_FLOW:
-		move_client_handle_flowing(ch, (struct rpc_start_flow *)hdr);
-		break;
-	case REQ_TYPE_TCP_INFO:
-		move_client_handle_tcp_info(ch, (struct rpc_tcp_info *)hdr);
-		break;
-	default:
-		/* send error to the client */
-		pr_warn("%s: invalid hdr type: %u", sockaddr_ntoa(&ch->addr), hdr->type);
-		hdr->type = REP_TYPE_INVALID_REQUEST;
-		put_write(ch, 0, sizeof(*hdr));
+	ssize_t bytes;
+	if (sscanf(ch->recvbuf, RPC_REQ_START_FLOW " %zd", &bytes) == 1 && bytes > 0)
+		move_client_handle_flowing(ch, bytes);
+	else if (strncmp(ch->recvbuf, RPC_REQ_TCP_INFO, strlen(RPC_REQ_TCP_INFO)) == 0)
+		move_client_handle_tcp_info(ch);
+	else {
+		pr_warn("%s: invalid request: %s",
+			sockaddr_ntoa(&ch->addr), ch->recvbuf);
+		snprintf(ch->buf, ch->buf_sz, "%s\n", RPC_REP_INVALID);
+		put_write(ch, 0, strlen(ch->buf));
 	}
 
 	return;

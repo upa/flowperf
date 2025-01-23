@@ -42,3 +42,26 @@ char *sockaddr_ntoa(struct sockaddr_storage *ss)
 
 	return buf;
 }
+
+
+int build_tcp_info_string(struct tcp_info *info, char *buf, size_t size)
+{
+	return snprintf(buf, size,
+			"lost=%u "	/* tcpi_lost 		*/
+			"retr=%u "	/* tcpi_retrans 	*/
+			"tret=%u "	/* tcpi_retransmits 	*/
+			"totr=%u "	/* tcpi_total_retrans 	*/
+			"fack=%u "	/* tcpi_fackets 	*/
+			"reor=%u "	/* tcpi_reodering 	*/
+			"sego=%u "	/* tcpi_segs_out 	*/
+			"segi=%u\n",	/* tcpi_segs_in 	*/
+			info->tcpi_lost,
+			info->tcpi_retrans,
+			info->tcpi_retransmits,
+			info->tcpi_total_retrans,
+			info->tcpi_fackets,
+			info->tcpi_reordering,
+			info->tcpi_segs_out,
+			info->tcpi_segs_in
+		);
+}
