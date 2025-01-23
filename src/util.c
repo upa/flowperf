@@ -46,21 +46,24 @@ char *sockaddr_ntoa(struct sockaddr_storage *ss)
 
 int build_tcp_info_string(struct tcp_info *info, char *buf, size_t size)
 {
+	/*
+	 * tcpi_sacked: the number of segments marked to be
+	 * transmitted by the selective ACK mechanism during the
+	 * connection. This happens when packets loss, or reordering
+	 * happens.
+	 *
+	 * tcpi_retransmits: the number of segments retransmitted by
+	 * RTO or fast retransmission during the connection.
+	 */
 	return snprintf(buf, size,
 			"lost=%u "	/* tcpi_lost 		*/
-			"retr=%u "	/* tcpi_retrans 	*/
-			"tret=%u "	/* tcpi_retransmits 	*/
-			"totr=%u "	/* tcpi_total_retrans 	*/
-			"fack=%u "	/* tcpi_fackets 	*/
-			"reor=%u "	/* tcpi_reodering 	*/
+			"sack=%u "	/* tcpi_sacked		*/
+			"retr=%u "	/* tcpi_retransmits 	*/
 			"sego=%u "	/* tcpi_segs_out 	*/
 			"segi=%u\n",	/* tcpi_segs_in 	*/
 			info->tcpi_lost,
-			info->tcpi_retrans,
+			info->tcpi_sacked,
 			info->tcpi_retransmits,
-			info->tcpi_total_retrans,
-			info->tcpi_fackets,
-			info->tcpi_reordering,
 			info->tcpi_segs_out,
 			info->tcpi_segs_in
 		);

@@ -6,6 +6,7 @@
 #define min(a, b) (((a) > (b)) ? (b) : (a))
 #define max(a, b) (((a) > (b)) ? (a) : (b))
 
+#define array_size(a) (sizeof(a) / sizeof(a[0]))
 
 
 # define likely(x)	__builtin_expect(!!(x), 1)
