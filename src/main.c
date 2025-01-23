@@ -1,6 +1,6 @@
 
 #include <server.h>
-#include <opts.h>
+#include <options.h>
 #include <print.h>
 
 

@@ -1,6 +1,6 @@
 
-#ifndef _OPTS_H_
-#define _OPTS_H_
+#ifndef _OPTIONS_H_
+#define _OPTIONS_H_
 
 #include <unistd.h>
 #include <string.h>
@@ -36,4 +36,4 @@ struct opts {
 };
 
 
-#endif /* _OPTS_ */
+#endif /* _OPTIONS_ */

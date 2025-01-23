@@ -11,7 +11,7 @@
 #include <liburing.h>
 
 #include <flowperf.h>
-#include <opts.h>
+#include <server.h>
 #include <util.h>
 
 struct server {
