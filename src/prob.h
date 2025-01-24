@@ -8,7 +8,7 @@
 #define PROB_KEY_SIZE	64
 
 struct prob_struct {
-	double	prob;
+	double	probability;
 	void	*data;
 	char	key[PROB_KEY_SIZE];
 };
@@ -20,25 +20,35 @@ struct prob_list_struct {
 };
 typedef struct prob_list_struct prob_list_t;
 
-
-/**
- * parse prob text and returns prob_list, prob_t.data is the key on each line.
- */
-prob_list_t *parse_prob_text(const char *path);
-
 /**
  * list:   prob_list_t*
  * prob:   prob_t* where the next prob is stored
  */
-#define foreach_prob(list, prob)			\
-	for (prob = &list->probs[0]; prob->prob > 0; prob++)
+#define foreach_prob(list, prob)                       \
+       for (prob = &list->probs[0]; prob->probability > 0; prob++)
 
 
-/**
+/* allocate a new prob_list_t */
+prob_list_t *prob_list_alloc(void);
+
+/* add a new prob_t to the list */
+int prob_list_append(prob_list_t *list, double prob_value, const char *key);
+
+/* parse prob text and append prob_t to the list */
+int prob_list_load_text(prob_list_t *list, const char *path);
+
+/* convert independent probability to cumulative ones */
+void prob_list_convert_to_cdf(prob_list_t *list);
+
+
+
+/*
  * pickup a prob object from the list. needle is a decimal on [0.0, 1.0].
  */
-prob_t *pickup_prob(prob_list_t *list, double needle);
+prob_t *prob_list_pickup(prob_list_t *list, double needle);
 
-#define pickup_prob_uniformly(list) pickup_prob(list, (double)rand() / RAND_MAX)
+#define prob_list_pickup_uniformly(list) pickup_prob(list, (double)rand() / RAND_MAX)
+
+void prob_list_dump_debug(prob_list_t *list);
 
 #endif /* _PROB_H_ */

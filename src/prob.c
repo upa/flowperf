@@ -1,28 +1,62 @@
 
+
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 
 #include <prob.h>
 #include <print.h>
 
-prob_list_t *prase_prob_text(const char *path)
+prob_list_t *prob_list_alloc(void)
 {
 	prob_list_t *list;
-	prob_t *prob;
-	char buf[512], key[256];
-	double prob_value, total, cum;
-	FILE *f;
-	int i = 0;
-
+	
 	if ((list = malloc(sizeof(*list))) == NULL) {
 		pr_err("malloc: %s", strerror(errno));
 		return NULL;
 	}
-	list->size = 0;
+	memset(list, 0, sizeof(*list));
+
+	list->probs = realloc(list->probs, 1 * sizeof(prob_t));
+	list->probs[0].probability = -1;	/* sentinel */
+
+	return list;
+}
+
+int prob_list_append(prob_list_t *list, double prob_value, const char *key)
+{
+	prob_t *prob;
+
+	if (prob_value < 0) {
+		pr_err("probability must be greater or equal to 0: %s %f",
+		       key, prob_value);
+		return -1;
+	}
+
+	list->probs = realloc(list->probs, (list->size + 1) * sizeof(prob_t));
+	if (!list->probs) {
+		pr_err("realloc: %s", strerror(errno));
+		return -1;
+	}
+
+	prob = &list->probs[list->size];
+	prob->probability = prob_value;
+	prob->data = NULL;
+	strncpy(prob->key, key, PROB_KEY_SIZE);
+	
+	list->probs[++list->size].probability = -1; /* sentinel */
+	return 0;
+}
+
+int prob_list_load_text(prob_list_t *list, const char *path)
+{
+	char buf[512], key[256];
+	double prob_value;
+	FILE *f;
 
 	if ((f = fopen(path, "r")) == NULL) {
 		pr_err("fopen(%s): %s", path, strerror(errno));
-		return NULL;
+		return -1;
 	}
 
 	while (fgets(buf, sizeof(buf), f)) {
@@ -31,43 +65,58 @@ prob_list_t *prase_prob_text(const char *path)
 			if (strlen(key) > PROB_KEY_SIZE)
 				pr_warn("too long key \"%s\", truncated", key);
 
-			list->probs = realloc(list->probs, i * sizeof(prob_t));
-			if (list->probs == NULL) {
-				pr_err("realloc: %s", strerror(errno));
-				return NULL;
-			}
-			list->probs[i].prob = prob_value;
-			list->probs[i].data = NULL;
-			strncpy(list->probs[i].key, key, PROB_KEY_SIZE);
-			i++;
+			if (prob_list_append(list, prob_value, key) < 0)
+				return -1;
 		}
 	}
 
-	list->size = i;
-
-	/* add sentinel */
-	list->probs = realloc(list->probs, i * sizeof(prob_t));
-	if (list->probs == NULL) {
-		pr_err("realloc: %s", strerror(errno));
-		return NULL;
-	}
-	list->probs[i].prob = -1;
-	list->probs[i].data = NULL;
-	strncpy(list->probs[i].key, "sentinel", PROB_KEY_SIZE);
-
 	fclose(f);
 
+	return 0;
+}
+
+void prob_list_convert_to_cdf(prob_list_t *list)
+{
+	double prob_total = 0, prob_cum = 0;
+	prob_t *prob;
+
 	/* change list->probs[].prob as cumulative ones */
-	total = 0;
-	foreach_prob(list, prob) {
-		total += prob->prob;
-	}
 
-	cum = 0;
-	foreach_prob(list, prob) {
-		cum += prob->prob;
-		prob->prob = cum / total;
-	}
+	foreach_prob(list, prob)
+		prob_total += prob->probability;
 
-	return list;
+	foreach_prob(list, prob) {
+		prob_cum += prob->probability;
+		prob->probability = prob_cum / prob_total;
+	}
+}
+
+
+prob_t *pickup_prob(prob_list_t *list, double needle)
+{
+	int i = round(list->size / 2);
+	prob_t *prob;
+
+	while (1) {
+		prob = &list->probs[i];
+		if (prob->probability >= needle &&
+		    (i == 0 || needle > list->probs[i-1].probability)) {
+			return prob;
+		}
+
+		if (prob->probability > needle)
+			i += round((list->size - i) / 2);
+		else
+			i -= round(i / 2);
+	}
+}
+
+void prob_list_dump_debug(prob_list_t *list)
+{
+	prob_t *prob;
+	if (get_print_severity() >= SEVERITY_DEBUG) {
+		foreach_prob(list, prob) {
+			pr_debug("%s\t%.4f", prob->key, prob->probability);
+		}
+	}
 }
