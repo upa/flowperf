@@ -22,9 +22,22 @@ static void usage()
 	       "    -h              print this help\n"
 	       "\n"
 	       "  Server mode options\n"
-	       "    -a ADDRESS      local address to bind\n"
-	       "\n\n"
-		);
+	       "    -a ADDRESS        local address to bind\n"
+	       "\n"
+	       "  Client mode options\n"
+	       "    -n NUMBER       number of flows to be done on the benchmark\n"
+	       "    -t TIME         time (sec) of the benchmark, default 10 sec\n"
+	       "    -x CONCURRENCY  number of cunccurent flows\n"
+	       "\n"
+	       "    -d ADDR_TXT     txt file contains 'ADDR PROBABLITY' per line\n"
+	       "    -D ADDR:PROB    dest address and its probability\n"
+	       "\n"
+	       "    -f FLOW_TXT     txt file contains 'FLOWSIZE PROBABILITY' per line\n"
+	       "    -F FLOW_SZ:PROB flow size (byte) and its probablity\n"
+	       "\n"
+	       "    -i INTVAL_TXT   txt file contains 'INTERVAL PROBABLITY' per line\n"
+	       "    -I INTVAL:PROB  interval (nsec) and its probablity\n"
+	       "\n\n");
 }
 
 
@@ -32,6 +45,7 @@ static char _default_local_addr[] = DEFAULT_LOCAL_ADDR;
 
 static int parse_args(int argc, char **argv, struct opts *o)
 {
+	char *c;
 	int ch;
 
 	memset(o, 0, sizeof(*o));
@@ -40,9 +54,27 @@ static int parse_args(int argc, char **argv, struct opts *o)
 	o->severity = SEVERITY_WARN;
 	o->buf_sz = DEFAULT_HANDLE_BUF_SZ;
 	o->batch_sz = DEFAULT_BATCH_SIZE;
+
+	/* server options */
 	o->local_addr = _default_local_addr;
 
-	while ((ch = getopt(argc, argv, "scp:q:b:B:vha:")) != -1) {
+	/* client options */
+	o->nr_flows = 0;
+	o->time = 10;
+	o->concurrency = 1;
+	if ((o->addrs = prob_list_alloc()) == NULL)
+		return -1;
+	if ((o->flows = prob_list_alloc()) == NULL)
+		return -1;
+	if ((o->intervals = prob_list_alloc()) == NULL)
+		return -1;
+
+#define OPTSTR_COMMON "scp:q:b:B:vh"
+#define OPTSTR_SERVER "a:"
+#define OPTSTR_CLIENT "n:t:x:d:D:f:F:i:I:"
+#define OPTSTR OPTSTR_COMMON OPTSTR_SERVER OPTSTR_CLIENT
+
+	while ((ch = getopt(argc, argv, OPTSTR)) != -1) {
 		switch (ch) {
 		case 's':
 			o->mode = MODE_SERVER;
@@ -76,8 +108,73 @@ static int parse_args(int argc, char **argv, struct opts *o)
 		case 'h':
 			usage();
 			return -1;
+
 		case 'a':
 			o->local_addr = optarg;
+			break;
+
+		case 'n':
+			o->nr_flows = atoi(optarg);
+			if (o->nr_flows < 0) {
+				pr_err("invalid number of flows: %s", optarg);
+				return -1;
+			}
+			break;
+		case 't':
+			o->time = atoi(optarg);
+			if (o->time < 0) {
+				pr_err("invalid time: %s", optarg);
+				return -1;
+			}
+			break;
+		case 'x':
+			o->concurrency = atoi(optarg);
+			if (o->concurrency < 1) {
+				pr_err("invalid concurrency: %s", optarg);
+				return -1;
+			}
+			break;
+		case 'd':
+			if (prob_list_load_text(o->addrs, optarg) < 0)
+				return -1;
+			break;
+		case 'D':
+			c = strrchr(optarg, ':');
+			if (!c) {
+				pr_err("invalid addr:prob format: %s", optarg);
+				return -1;
+			}
+			*c = '\0';
+			if (prob_list_append(o->addrs, atof(c+1), optarg) < 0)
+				return -1;
+			break;
+		case 'f':
+			if (prob_list_load_text(o->flows, optarg) < 0)
+				return -1;
+			break;
+		case 'F':
+			c = strrchr(optarg, ':');
+			if (!c) {
+				pr_err("invalid flow:prob format: %s", optarg);
+				return -1;
+			}
+			*c = '\0';
+			if (prob_list_append(o->flows, atof(c+1), optarg) < 0)
+				return -1;
+			break;
+		case 'i':
+			if (prob_list_load_text(o->intervals, optarg) < 0)
+				return -1;
+			break;
+		case 'I':
+			c = strrchr(optarg, ':');
+			if (!c) {
+				pr_err("invalid interval:prob format: %s", optarg);
+				return -1;
+			}
+			*c = '\0';
+			if (prob_list_append(o->intervals, atof(c+1), optarg) < 0)
+				return -1;
 			break;
 		default:
 			usage();
@@ -108,7 +205,7 @@ int main(int argc, char **argv)
 		return start_server(&o);
 	case MODE_CLIENT:
 		/* to be implemented */
-		break;
+		return start_client(&o);
 	}
 
 	pr_err("-s or -c option is required.");

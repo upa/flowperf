@@ -53,6 +53,7 @@ int prob_list_load_text(prob_list_t *list, const char *path)
 	char buf[512], key[256];
 	double prob_value;
 	FILE *f;
+	int ret;
 
 	if ((f = fopen(path, "r")) == NULL) {
 		pr_err("fopen(%s): %s", path, strerror(errno));
@@ -61,7 +62,8 @@ int prob_list_load_text(prob_list_t *list, const char *path)
 
 	while (fgets(buf, sizeof(buf), f)) {
 		if (buf[0] == '#') continue;
-		if (sscanf("%s %f", key, &prob_value) == 2) {
+		ret = sscanf(buf, "%s %lf", key, &prob_value);
+		if (ret == 2) {
 			if (strlen(key) > PROB_KEY_SIZE)
 				pr_warn("too long key \"%s\", truncated", key);
 
@@ -98,6 +100,7 @@ prob_t *pickup_prob(prob_list_t *list, double needle)
 	prob_t *prob;
 
 	while (1) {
+		/* bidirectional search */
 		prob = &list->probs[i];
 		if (prob->probability >= needle &&
 		    (i == 0 || needle > list->probs[i-1].probability)) {
@@ -116,7 +119,7 @@ void prob_list_dump_debug(prob_list_t *list)
 	prob_t *prob;
 	if (get_print_severity() >= SEVERITY_DEBUG) {
 		foreach_prob(list, prob) {
-			pr_debug("%s\t%.4f", prob->key, prob->probability);
+			pr_debug("%s\t%f", prob->key, prob->probability);
 		}
 	}
 }

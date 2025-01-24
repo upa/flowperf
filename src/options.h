@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <netinet/in.h>
 
+#include <prob.h>
 #include <print.h>
 
 #define MODE_SERVER	1
@@ -31,8 +32,19 @@ struct opts {
 	int 	buf_sz;
 	int 	batch_sz;
 
+
 	/* server options */
 	char	*local_addr;
+
+
+	/* client options */
+	int     nr_flows;
+	int 	time;
+	int 	concurrency;
+
+	prob_list_t *addrs;
+	prob_list_t *flows;
+	prob_list_t *intervals;
 };
 
 

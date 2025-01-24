@@ -22,8 +22,8 @@ struct server {
 	struct io_uring ring;
 };
 
-struct server serv;
-struct io_uring *ring = &serv.ring;
+static struct server serv;
+static struct io_uring *ring = &serv.ring;
 
 
 #define RECV_BUF_SZ	4096
@@ -36,7 +36,7 @@ struct client_handle {
 	socklen_t 		addrlen;
 	char			addrstr[ADDRSTRLEN];
 
-	/* state and uring even type */
+	/* state and uring event type */
 	int 	state;
 	int	event;
 

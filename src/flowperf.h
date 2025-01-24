@@ -78,7 +78,7 @@
  * or to WAIT.
  */
 
-#define CONNECTION_HANDLE_STATE_WAIT	4
+#define CONNECTION_HANDLE_STATE_WAITING	4
 /* Sleep a while as flow interval gap time.
  *
  * Assumed Compeltion Event:
