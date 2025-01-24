@@ -50,7 +50,15 @@ int prob_list_iterate(prob_list_t *list, int (*iter)(prob_t *));
  */
 prob_t *prob_list_pickup(prob_list_t *list, double needle);
 
-#define prob_list_pickup_uniformly(list) pickup_prob(list, (double)rand() / RAND_MAX)
+#define prob_list_pickup_uniformly(list) \
+	prob_list_pickup(list, (double)rand() / RAND_MAX)
+
+
+void *prob_list_pickup_data(prob_list_t *list, double needle);
+
+#define prob_list_pickup_data_uniformly(list) \
+	prob_list_pickup_data(list, (double)rand() / RAND_MAX)
+
 
 void prob_list_dump_debug(prob_list_t *list);
 

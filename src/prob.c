@@ -4,6 +4,7 @@
 #include <string.h>
 #include <math.h>
 #include <assert.h>
+#include <stdbool.h>
 
 #include <prob.h>
 #include <print.h>
@@ -111,7 +112,7 @@ int prob_list_iterate(prob_list_t *list, int (*iter)(prob_t *))
 	return 0;
 }
 
-prob_t *pickup_prob(prob_list_t *list, double needle)
+prob_t *prob_list_pickup(prob_list_t *list, double needle)
 {
 	int i = round(list->size / 2);
 	prob_t *prob;
@@ -131,6 +132,15 @@ prob_t *pickup_prob(prob_list_t *list, double needle)
 		else
 			i -= round(i / 2);
 	}
+
+	/* not reached */
+	assert(false);
+}
+
+void *prob_list_pickup_data(prob_list_t *list, double needle)
+{
+	prob_t *prob = prob_list_pickup(list, needle);
+	return prob->data;
 }
 
 void prob_list_dump_debug(prob_list_t *list)
