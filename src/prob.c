@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <assert.h>
 
 #include <prob.h>
 #include <print.h>
@@ -17,6 +18,7 @@ prob_list_t *prob_list_alloc(void)
 	}
 	memset(list, 0, sizeof(*list));
 
+	list->size = 0;
 	list->probs = realloc(list->probs, 1 * sizeof(prob_t));
 	list->probs[0].probability = -1;	/* sentinel */
 
@@ -94,10 +96,27 @@ void prob_list_convert_to_cdf(prob_list_t *list)
 }
 
 
+int prob_list_iterate(prob_list_t *list, int (*iter)(prob_t *))
+{
+	prob_t *prob;
+
+	/* apply iter to all prob in the list */
+	foreach_prob(list, prob) {
+		if (iter(prob) < 0) {
+			pr_err("iter function failed: key=%s probability=%f",
+			       prob->key, prob->probability);
+			return -1;
+		}
+	}
+	return 0;
+}
+
 prob_t *pickup_prob(prob_list_t *list, double needle)
 {
 	int i = round(list->size / 2);
 	prob_t *prob;
+
+	assert(list->size > 0);
 
 	while (1) {
 		/* bidirectional search */

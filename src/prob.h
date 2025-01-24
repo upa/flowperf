@@ -7,18 +7,18 @@
 
 #define PROB_KEY_SIZE	64
 
-struct prob_struct {
+typedef struct prob_struct {
 	double	probability;
 	void	*data;
 	char	key[PROB_KEY_SIZE];
-};
-typedef struct prob_struct prob_t;
+} prob_t;
 
-struct prob_list_struct {
-	size_t	size;		/* probs size */
+
+typedef struct prob_list_struct {
+	size_t	size;	/* probs size */
 	prob_t	*probs;	/* probs[size].prob is -1 (sentinel) */
-};
-typedef struct prob_list_struct prob_list_t;
+} prob_list_t;
+
 
 /**
  * list:   prob_list_t*
@@ -27,6 +27,7 @@ typedef struct prob_list_struct prob_list_t;
 #define foreach_prob(list, prob)                       \
        for (prob = &list->probs[0]; prob->probability > 0; prob++)
 
+#define prob_list_is_empty(list) (list->size == 0)
 
 /* allocate a new prob_list_t */
 prob_list_t *prob_list_alloc(void);
@@ -40,6 +41,8 @@ int prob_list_load_text(prob_list_t *list, const char *path);
 /* convert independent probability to cumulative ones */
 void prob_list_convert_to_cdf(prob_list_t *list);
 
+/* function to fill list->probs[n].data */
+int prob_list_iterate(prob_list_t *list, int (*iter)(prob_t *));
 
 
 /*

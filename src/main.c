@@ -1,4 +1,5 @@
 
+#include <client.h>
 #include <server.h>
 #include <options.h>
 #include <print.h>
