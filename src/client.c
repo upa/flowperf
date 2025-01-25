@@ -481,7 +481,7 @@ static void process_connection_handle_tcp_info(struct connection_handle *ch,
 	case EVENT_TYPE_WRITE:
 		/* write "T" of RPC request done. Put a read for
 		 * receiving bytes of the tcp_info. */
-		if (cqe->res != 0) {
+		if (cqe->res <= 0) {
 			pr_warn("%s: write: %s", ch->pa->addrstr, strerror(-cqe->res));
 			close_connection_handle(ch);
 			return;
