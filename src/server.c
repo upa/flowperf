@@ -342,10 +342,21 @@ static void process_client_handle_flowing(struct client_handle *ch,
 
 	/* handle is FLOWING. A send_zc rises complitions. 
 	 */
-	if (cqe->res < 0 && cqe->flags & IORING_CQE_F_MORE) {
-		pr_notice("%s: send_zc: %s, prepare for closing connection",
-			  ch->addrstr, strerror(-cqe->res));
-		ch->send_zc_failed = 1;
+	if (cqe->res < 0) {
+		if (!(cqe->flags & IORING_CQE_F_MORE)) {
+			/* not multi CQEs. close the connection */
+			pr_notice("%s: send_zc: %s, close connection",
+				  ch->addrstr, strerror(-cqe->res));
+			close_client_handle(ch);
+		} else {
+			/* multi CQEs for send_zc. defer closing the
+			 * socket until cqe with IORING_CQE_F_NOTIF
+			 * has come.
+			 */
+			pr_notice("%s: send_zc: %s, prepare for closing connection",
+				  ch->addrstr, strerror(-cqe->res));
+			ch->send_zc_failed = 1;
+		}
 		return;
 	}
 	if (ch->send_zc_failed && cqe->flags & IORING_CQE_F_NOTIF) {
