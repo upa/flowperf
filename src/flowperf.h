@@ -58,7 +58,7 @@
  * REQ_TYPE_START_FLOW.
  */
 
-#define CONNECTION_HANDLE_STATE_FLOWING	2
+#define CONNECTION_HANDLE_STATE_FLOWING		2
 /* Benchmarking, receving data from the socket.
  *
  * Assumed Completion Event:
@@ -88,7 +88,26 @@
  * next connection of an RPC.
  */
 
-#define CONNCTION_HANDLE_STATE_FINISHED		5
+#define CONNCTION_HANDLE_STATE_DONE		5
+
+
+inline static char connection_handle_state_name(int state)
+{
+	switch (state) {
+	case CONNECTION_HANDLE_STATE_CONNECTING:
+		return 'c';
+	case CONNECTION_HANDLE_STATE_FLOWING:
+		return 'f';
+	case CONNECTION_HANDLE_STATE_TCP_INFO:
+		return 't';
+	case CONNECTION_HANDLE_STATE_INTERVAL:
+		return 'i';
+	case CONNCTION_HANDLE_STATE_DONE:
+		return 'd';
+	}
+	return 'x';
+}
+
 
 #define EVENT_TYPE_ACCEPT	0
 #define EVENT_TYPE_CONNECT	1

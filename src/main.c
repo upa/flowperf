@@ -100,7 +100,8 @@ static int parse_args(int argc, char **argv, struct opts *o)
 		case 'B':
 			o->batch_sz = atoi(optarg);
 			if (o->batch_sz < 1 || DEFAULT_QUEUE_DEPTH < o->batch_sz) {
-				pr_err("invalid batch size: %s", optarg);
+				pr_err("invalid batch size %s, must be gt 1 and lt %d",
+				       optarg, DEFAULT_QUEUE_DEPTH);
 				return -1;
 			}
 			break;

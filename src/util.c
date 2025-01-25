@@ -73,11 +73,11 @@ int build_tcp_info_string(int sock, char *buf, size_t size)
 	 * RTO or fast retransmission during the connection.
 	 */
 	return snprintf(buf, size,
-			"lost=%u "	/* tcpi_lost 		*/
-			"sack=%u "	/* tcpi_sacked		*/
-			"retr=%u "	/* tcpi_retransmits 	*/
-			"sego=%u "	/* tcpi_segs_out 	*/
-			"segi=%u\n",	/* tcpi_segs_in 	*/
+			"lost=%u,"	/* tcpi_lost 		*/
+			"sack=%u,"	/* tcpi_sacked		*/
+			"retr=%u,"	/* tcpi_retransmits 	*/
+			"sego=%u,"	/* tcpi_segs_out 	*/
+			"segi=%u",	/* tcpi_segs_in 	*/
 			info.tcpi_lost,
 			info.tcpi_sacked,
 			info.tcpi_retransmits,

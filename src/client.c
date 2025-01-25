@@ -6,6 +6,7 @@
 #include <netdb.h>
 #include <time.h>
 #include <signal.h>
+#include <assert.h>
 #include <linux/tcp.h>
 
 #include <liburing.h>
@@ -14,17 +15,23 @@
 #include <client.h>
 #include <util.h>
 
+/* strcture representing flowperf client process */
 struct client {
 	struct opts *o;
 
+	/* easy list with connection_handle->next  */
+	struct connection_handle *first, *last;
+
 	int nr_flows_started;
-	int nr_flows_finished;
+	int nr_flows_done;
 
 	struct io_uring ring;
 };
 
 static struct client cli;
 static struct io_uring *ring = &cli.ring;
+
+/* functions for probablity list */
 
 #define ADDRSTRLEN	64
 
@@ -125,6 +132,34 @@ static int prob_list_iter_interval(prob_t *prob)
 	return 0;
 }
 
+/* buik timestamp logic */
+struct timespec_q {
+	struct timespec *tstamps[DEFAULT_QUEUE_DEPTH];
+	int tail;
+} tsq;
+
+static void tsq_zerorize()
+{
+	tsq.tail = 0;
+}
+
+static void tsq_append(struct timespec *ts)
+{
+	tsq.tstamps[tsq.tail++] = ts;
+	assert(tsq.tail < DEFAULT_QUEUE_DEPTH);
+}
+
+static void tsq_bulk_get_time()
+{
+	/* save timestamp to appended timespec objects */
+	int i;
+	if (tsq.tail > 0) {
+		clock_gettime(CLOCK_MONOTONIC, tsq.tstamps[0]);
+		for (i = 1; i < tsq.tail; i++) {
+			*tsq.tstamps[i] = *tsq.tstamps[0];
+		}
+	}
+}
 
 
 #define SEND_BUF_SZ	128
@@ -132,6 +167,8 @@ static int prob_list_iter_interval(prob_t *prob)
 struct connection_handle {
 	/* a handle for a connection to a server */
 	int	sock;
+
+	struct connection_handle *next;
 
 	prob_addr_t *pa;
 	prob_flow_t *pf;
@@ -148,23 +185,71 @@ struct connection_handle {
 	size_t	buf_sz;
 	ssize_t	remain_bytes;	/* remaining bytes to be received for flowing */
 
-	struct timespec start, end;
+	struct timespec ts_start;	/* tstamp of start time (put connect())*/
+	struct timespec ts_flow_start;	/* tstamp of RPC FLOW sent */
+	struct timespec ts_flow_end;	/* tstamp of RPC FLOW done */
 
 	/* tcp_info */
 	char tcp_info_s[TCP_INFO_STRLEN];
 	char tcp_info_c[TCP_INFO_STRLEN];
 };
 
-static int init_client_io_uring(void)
+
+static void connection_handle_append(struct connection_handle *ch)
 {
+	/* append ch to the list */
+	ch->next = NULL;
+
+	if (cli.first == NULL) {
+		cli.first = ch;
+		cli.last = ch;
+	} else {
+		cli.last->next = ch;
+		cli.last = ch;
+	}
+}
+
+static time_t timespec_sub_nsec(struct timespec *after, struct timespec *before)
+{
+	time_t diff_nsec = ((after->tv_sec * 1000000000 + after->tv_nsec) - 
+			    (before->tv_sec * 1000000000 + before->tv_nsec));
+	return diff_nsec;
+}
+
+void print_connection_handle_result(FILE *fp, struct connection_handle *ch)
+{
+	char buf[512];
 	int ret;
 
-	ret = io_uring_queue_init(cli.o->queue_depth, ring, 0);
-	if (ret < 0) {
-		pr_err("io_uring_queue_init: %s", strerror(-ret));
-		return -1;
-	}
-	return 0;
+	ret = snprintf(buf, sizeof(buf),
+		       "state=%c "
+		       "dst=%s "
+		       "flow_size=%lu "
+		       "time_conn=%lu "
+		       "time_flow=%lu "
+		       "tcp_c=%s",
+		       connection_handle_state_name(ch->state),
+		       ch->pa->addrstr,
+		       ch->pf->bytes,
+		       timespec_sub_nsec(&ch->ts_flow_start, &ch->ts_start),
+		       timespec_sub_nsec(&ch->ts_flow_end, &ch->ts_flow_start),
+		       ch->tcp_info_c
+		);
+
+	if (cli.o->server_tcp_info)
+		ret += snprintf(buf + ret, sizeof(buf) - ret,
+				" tcp_s=%s", ch->tcp_info_s);
+	snprintf(buf + ret, sizeof(buf) - 1, "\n");
+
+	fputs(buf, fp);
+}
+
+static void print_result(FILE *fp)
+{
+	struct connection_handle *ch;
+
+	for (ch = cli.first; ch != NULL; ch = ch->next) 
+		print_connection_handle_result(fp, ch);
 }
 
 
@@ -217,6 +302,10 @@ static int put_connect(void)
 	ch->event = EVENT_TYPE_CONNECT;
 	io_uring_prep_connect(sqe, ch->sock, (struct sockaddr *)&pa->saddr, pa->salen);
 	io_uring_sqe_set_data(sqe, ch);
+
+	connection_handle_append(ch);
+	tsq_append(&ch->ts_start);
+
 	return 0;
 }
 
@@ -246,8 +335,8 @@ static void close_connection_handle(struct connection_handle *ch)
 
 	if (cli.o->nr_flows) {
 		/* number of flows to be done is specified */
-		cli.nr_flows_finished++;
-		if (cli.nr_flows_finished >= cli.o->nr_flows) {
+		cli.nr_flows_done++;
+		if (cli.nr_flows_done >= cli.o->nr_flows) {
 			/* specified number of flows done. finish the benchmark */
 			stop_running();
 			return;
@@ -296,6 +385,7 @@ static void move_connection_handle_interval(struct connection_handle *ch)
 {
 	if (ch->pi == NULL) {
 		/* interval is not specified. no need to sleep */
+		ch->state = CONNCTION_HANDLE_STATE_DONE;
 		close_connection_handle(ch);
 		return;
 	}
@@ -336,6 +426,8 @@ static void process_connection_handle_flowing(struct connection_handle *ch,
 
 		/* all bytes transfered. Next is to save tcp_info */
 		pr_debug("%s: flow %lu bytes done", ch->pa->addrstr, ch->pf->bytes);
+		clock_gettime(CLOCK_MONOTONIC, &ch->ts_flow_end);
+
 		build_tcp_info_string(ch->sock, ch->tcp_info_c, TCP_INFO_STRLEN);
 		if (cli.o->server_tcp_info) {
 			/* get tcp_info from the server side */
@@ -356,6 +448,7 @@ static void process_connection_handle_flowing(struct connection_handle *ch,
 			close_connection_handle(ch);
 			return;
 		}
+		tsq_append(&ch->ts_flow_start);
 		put_read(ch, ch->buf, ch->buf_sz);
 		break;
 
@@ -407,7 +500,7 @@ static void process_connection_handle_interval(struct connection_handle *ch,
 		       ch->state, ch->event);
 		goto out;
 	}
-	ch->state = CONNCTION_HANDLE_STATE_FINISHED;
+	ch->state = CONNCTION_HANDLE_STATE_DONE;
 out:
 	close_connection_handle(ch);
 }
@@ -442,10 +535,12 @@ static int client_loop(void)
 	int ret;
 
 	pr_info("put %d connect() events", cli.o->concurrency);
+	tsq_zerorize();
 	for (i = 0; i < cli.o->concurrency; i++) {
 		if (put_connect() < 0)
 			return -1;
 	}
+	tsq_bulk_get_time();
 
 	if ((ret = io_uring_submit(ring)) < 0) {
 		pr_err("io_uring_submit: %s", strerror(-ret));
@@ -454,6 +549,9 @@ static int client_loop(void)
 
 	pr_notice("start the client loop");
 	while (is_running()) {
+
+		tsq_zerorize();
+
 		nr_cqes = io_uring_peek_batch_cqe(ring, cqes, cli.o->batch_sz);
 		if (nr_cqes == 0) {
 			if ((ret = io_uring_wait_cqe(ring, &cqes[0])) < 0) {
@@ -470,6 +568,8 @@ static int client_loop(void)
 
 		io_uring_cq_advance(ring, i);
 
+		tsq_bulk_get_time();
+
 		if ((ret = io_uring_submit(ring)) < 0) {
 			pr_err("io_uring_submit: %s", strerror(-ret));
 			return -1;
@@ -483,14 +583,27 @@ static int client_loop(void)
 }
 
 
+static int init_client_io_uring(void)
+{
+	int ret;
+
+	ret = io_uring_queue_init(cli.o->queue_depth, ring, 0);
+	if (ret < 0) {
+		pr_err("io_uring_queue_init: %s", strerror(-ret));
+		return -1;
+	}
+	return 0;
+}
+
 static void sigint_handler(int signo) {
     pr_notice("^C pressed. Shutting down.");
     stop_running();
 }
 
-
 int start_client(struct opts *o)
 {
+	int ret;
+
 	memset(&cli, 0, sizeof(cli));
 	cli.o = o;
 
@@ -532,5 +645,10 @@ int start_client(struct opts *o)
 	signal(SIGPIPE, SIG_IGN);
 	signal(SIGINT, sigint_handler);
 
-	return client_loop();
+	ret = client_loop();
+
+	print_result(stdout);
+
+	return ret;
 }
+
