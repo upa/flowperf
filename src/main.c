@@ -17,8 +17,12 @@ static void usage()
 	       "  Common options\n"
 	       "    -p PORT         port number\n"
 	       "    -q QUEUE_DEPTH  iouring queue depth\n"
-	       "    -b BUF_SIZE     buffer size for each handle\n"
-	       "    -B BATCH_SIZE   batch size for processing io uring\n"
+	       "    -B BUF_SIZE     size of a buffer region (default 64KB)\n"
+	       "    -N NR_BUFS      number of buffer regions(default 512):\n"
+	       "                    BUF_SIZE x NR_BUFS memory regions are registered to "
+	       "                    io_uring by io_uring_register_buffers()\n"
+	       "\n"
+	       "    -b BATCH_SIZE   batch size for processing io uring\n"
 	       "    -v              increment verbose output level\n"
 	       "    -h              print this help\n"
 	       "\n"
@@ -53,9 +57,10 @@ static int parse_args(int argc, char **argv, struct opts *o)
 	memset(o, 0, sizeof(*o));
 	o->port = DEFAULT_PORT;
 	o->queue_depth = DEFAULT_QUEUE_DEPTH;
+	o->buf_sz = MIN_BUF_SZ;
+	o->nr_bufs = MIN_NR_BUFS;
+	o->batch_sz = DEFAULT_BATCH_SZ;
 	o->severity = SEVERITY_WARN;
-	o->buf_sz = DEFAULT_HANDLE_BUF_SZ;
-	o->batch_sz = DEFAULT_BATCH_SIZE;
 
 	/* server options */
 	o->local_addr = _default_local_addr;
@@ -71,7 +76,7 @@ static int parse_args(int argc, char **argv, struct opts *o)
 	if ((o->intervals = prob_list_alloc()) == NULL)
 		return -1;
 
-#define OPTSTR_COMMON "scp:q:b:B:vh"
+#define OPTSTR_COMMON "scp:q:B:N:b:vh"
 #define OPTSTR_SERVER "a:"
 #define OPTSTR_CLIENT "n:t:x:Td:D:f:F:i:I:"
 #define OPTSTR OPTSTR_COMMON OPTSTR_SERVER OPTSTR_CLIENT
@@ -90,18 +95,25 @@ static int parse_args(int argc, char **argv, struct opts *o)
 		case 'q':
 			o->queue_depth = atoi(optarg);
 			break;
-		case 'b':
+		case 'B':
 			o->buf_sz = atoi(optarg);
-			if (o->buf_sz < 4096) {
-				pr_err("too small size: %s", optarg);
-				return -1;
+			if (o->buf_sz < MIN_BUF_SZ) {
+				pr_err("invalid buf_sz %s (must be ge %d)",
+				       optarg, MIN_BUF_SZ);
 			}
 			break;
-		case 'B':
+		case 'N':
+			o->nr_bufs = atoi(optarg);
+			if (o->nr_bufs < MIN_NR_BUFS) {
+				pr_err("invalid nr_bufs %s (must be ge %d)",
+				       optarg, MIN_NR_BUFS);
+			}
+			break;
+		case 'b':
 			o->batch_sz = atoi(optarg);
-			if (o->batch_sz < 1 || DEFAULT_QUEUE_DEPTH < o->batch_sz) {
-				pr_err("invalid batch size %s, must be gt 1 and lt %d",
-				       optarg, DEFAULT_QUEUE_DEPTH);
+			if (o->batch_sz < 1 || MAX_BATCH_SZ < o->batch_sz) {
+				pr_err("invalid batch size %s (must be gt 1 and lt %d)",
+				       optarg, MAX_BATCH_SZ);
 				return -1;
 			}
 			break;

@@ -134,7 +134,7 @@ static int prob_list_iter_interval(prob_t *prob)
 
 /* buik timestamp logic */
 struct timespec_q {
-	struct timespec *tstamps[DEFAULT_QUEUE_DEPTH];
+	struct timespec *tstamps[MAX_BATCH_SZ];
 	int tail;
 } tsq;
 
@@ -146,7 +146,7 @@ static void tsq_zerorize()
 static void tsq_append(struct timespec *ts)
 {
 	tsq.tstamps[tsq.tail++] = ts;
-	assert(tsq.tail < DEFAULT_QUEUE_DEPTH);
+	assert(tsq.tail < MAX_BATCH_SZ);
 }
 
 static void tsq_bulk_get_time()
@@ -535,7 +535,7 @@ static void client_process_cqe(struct io_uring_cqe *cqe)
 
 static int client_loop(void)
 {
-	struct io_uring_cqe *cqes[DEFAULT_QUEUE_DEPTH];
+	struct io_uring_cqe *cqes[MAX_BATCH_SZ];
 	unsigned nr_cqes, i;
 	int ret;
 

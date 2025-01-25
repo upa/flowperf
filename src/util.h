@@ -17,6 +17,11 @@
 /* check one sqe exists before get sqe */
 struct io_uring_sqe *io_uring_get_sqe_always(struct io_uring *ring);
 
+/* register buffers to io_uring*/
+struct iovec *io_uring_alloc_register_buffers(struct io_uring *ring,
+					      size_t buf_sz, int nr_bufs);
+
+
 
 /* convert sockaddr to ADDR:PORT string onto buf */
 void sockaddr_ntop(struct sockaddr_storage *ss, char *buf, socklen_t size);

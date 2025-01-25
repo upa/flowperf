@@ -18,8 +18,8 @@
 struct server {
 	int 	sock;
 	struct opts *o;
-
 	struct io_uring ring;
+	struct iovec *registered;
 };
 
 static struct server serv;
@@ -39,6 +39,15 @@ struct client_handle {
 	/* state and uring event type */
 	int 	state;
 	int	event;
+
+	int	send_zc_failed;
+	/* when send_zc failed, set to 1. send_zc kicks two
+	 * completion, first one has res and IORING_CQE_F_MORE, and
+	 * the second one has res=0 and IORING_CQE_F_NOTIF. If
+	 * IORING_CQE_F_MORE and res < 0, send_zc_faild set to 1.
+	 * Next, send_zc_faild = 1 and IORING_CQE_F_NOTIF, close the
+	 * connection.
+	 */
 
 	/* fields for an RPC transaction */
 	char	recvbuf[RECV_BUF_SZ];
@@ -114,6 +123,13 @@ static int init_serv_io_uring()
 		return -1;
 	}
 
+	/* in the server, we use just a single registered buf region
+	 * for send_zc to send meaningless data for RPC FLOW.
+	 */
+	serv.registered = io_uring_alloc_register_buffers(ring, serv.o->buf_sz, 1);
+	if (serv.registered == NULL)
+		return -1;
+
 	return 0;
 }
 
@@ -181,10 +197,18 @@ static void put_write_rep_invalid(struct client_handle *ch)
 	io_uring_sqe_set_data(sqe, ch);
 }
 
+static void put_send_zc(struct client_handle *ch, size_t len)
+{
+	struct io_uring_sqe *sqe = io_uring_get_sqe_always(ring);
+	ch->event = EVENT_TYPE_SEND_ZC;
+	io_uring_prep_send_zc_fixed(sqe, ch->sock, serv.registered[0].iov_base,
+				    len, 0, 0, 0);
+	io_uring_sqe_set_data(sqe, ch);
+}
 
 static void close_client_handle(struct client_handle *ch)
 {
-	pr_debug("%s: purge client handle", ch->addrstr);
+	pr_debug("%s: close connection", ch->addrstr);
 	if (ch->sock > 1)
 		close(ch->sock);
 	if (ch->buf) {
@@ -235,7 +259,7 @@ void move_client_handle_flowing(struct client_handle *ch, ssize_t bytes)
 	pr_debug("%s: START FLOW %zd", ch->addrstr, bytes);
 	ch->state = CLIENT_HANDLE_STATE_FLOWING;
 	ch->remain_bytes = bytes;
-	put_write(ch, 0, min(ch->remain_bytes, ch->buf_sz));
+	put_send_zc(ch, min(ch->remain_bytes, ch->buf_sz));
 }
 
 void move_client_handle_tcp_info(struct client_handle *ch)
@@ -309,27 +333,34 @@ close:
 static void process_client_handle_flowing(struct client_handle *ch,
 					  struct io_uring_cqe *cqe)
 {
-	if (ch->event != EVENT_TYPE_WRITE) {
+	if (ch->event != EVENT_TYPE_SEND_ZC) {
 		pr_err("invalid state/event pair: state=%d event=%d",
 		       ch->state, ch->event);
-		goto close;
+		close_client_handle(ch);
+		return;
 	}
 
-	/* handle is FLOWING. A write event done. Put a new write if
-	 * bytes to be transfered remain, or change the state to the
-	 * ACCEPTED if all bytes have been transmitted.
+	/* handle is FLOWING. A send_zc rises complitions. 
 	 */
-	if (cqe->res < 0) {
-		pr_notice("%s: wirte: %s, close connection",
+	if (cqe->res < 0 && cqe->flags & IORING_CQE_F_MORE) {
+		pr_notice("%s: send_zc: %s, prepare for closing connection",
 			  ch->addrstr, strerror(-cqe->res));
-		goto close;
+		ch->send_zc_failed = 1;
+		return;
+	}
+	if (ch->send_zc_failed && cqe->flags & IORING_CQE_F_NOTIF) {
+		close_client_handle(ch);
+		return;
 	}
 
 	ch->remain_bytes -= cqe->res;
 
+	if (cqe->flags & IORING_CQE_F_MORE)
+		return; /* more cqe for the last write (send_zc) will come */
+
 	if (ch->remain_bytes > 0) {
-		/* we need to send more bytes */
-		put_write(ch, 0, min(ch->remain_bytes, ch->buf_sz));
+		/* we need to send more bytes. put a new send_zc */
+		put_send_zc(ch, min(ch->remain_bytes, ch->buf_sz));
 	} else {
 		/* all bytes transfered */
 		pr_debug("%s: RPC FLOW finished", ch->addrstr);
@@ -338,9 +369,6 @@ static void process_client_handle_flowing(struct client_handle *ch,
 	}
 
 	return;
-
-close:
-	close_client_handle(ch);
 }
 
 static void process_client_handle_tcp_info(struct client_handle *ch,
@@ -349,7 +377,8 @@ static void process_client_handle_tcp_info(struct client_handle *ch,
 	if (ch->event != EVENT_TYPE_WRITE) {
 		pr_err("invalid state/event pair: state=%d event=%d",
 		       ch->state, ch->event);
-		goto close;
+		close_client_handle(ch);
+		return;
 	}
 	
 	/* handle is TCP_INFO, we are now sending tcp_info structure
@@ -359,25 +388,21 @@ static void process_client_handle_tcp_info(struct client_handle *ch,
 	 */
 
 	if (cqe->res < 0) {
-		pr_notice("%s: wirte: %s, close connection",
+		pr_notice("%s: write: %s, close connection",
 			  ch->addrstr, strerror(-cqe->res));
-		goto close;
+		return;
 	}
 
 	ch->remain_bytes -= cqe->res;
+	if (ch->remain_bytes > 0)
+		pr_warn("%s: send tcp_info truncated %ld bytes",
+			ch->addrstr, ch->remain_bytes);
 
-	if (ch->remain_bytes > 0) {
-		put_write(ch, cqe->res, min(ch->remain_bytes, ch->buf_sz));
-	} else {
-		/* all bytes transferred */
-		pr_debug("%s: RPC TCP_INFO finished", ch->addrstr);
-		ch->state = CLIENT_HANDLE_STATE_ACCEPTED;
-		put_read(ch);
-	}
+	pr_debug("%s: RPC TCP_INFO finished", ch->addrstr);
+	ch->state = CLIENT_HANDLE_STATE_ACCEPTED;
+	put_read(ch);
+
 	return;
-
-close:
-	close_client_handle(ch);
 }
 
 
@@ -406,7 +431,7 @@ static void server_process_cqe(struct io_uring_cqe *cqe)
 
 static int server_loop(void)
 {
-	struct io_uring_cqe *cqes[DEFAULT_QUEUE_DEPTH];
+	struct io_uring_cqe *cqes[MAX_BATCH_SZ];
 	unsigned nr_cqes, i;
 	int ret;
 

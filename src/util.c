@@ -1,5 +1,6 @@
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <netdb.h>
@@ -16,6 +17,35 @@ struct io_uring_sqe *io_uring_get_sqe_always(struct io_uring *ring)
 		io_uring_submit_and_wait(ring, 1);
 	return io_uring_get_sqe(ring);
 }
+
+struct iovec *io_uring_alloc_register_buffers(struct io_uring *ring,
+					      size_t buf_sz, int nr_bufs)
+{
+	struct iovec *iov;
+	int i, ret;
+
+	if ((iov = calloc(nr_bufs, sizeof(struct iovec))) == NULL) {
+		pr_err("calloc: %s", strerror(errno));
+		return NULL;
+	}
+
+	for (i = 0; i < nr_bufs; i++) {
+		iov[i].iov_len = buf_sz;
+		iov[i].iov_base = malloc(buf_sz);
+		if (iov[i].iov_base == NULL) {
+			pr_err("malloc: %s", strerror(errno));
+			return NULL;
+		}
+	}
+
+	ret = io_uring_register_buffers(ring, iov, nr_bufs);
+	if (ret < 0) {
+		pr_err("io_uring_register_buffers: %s", strerror(-ret));
+		return NULL;
+	}
+	return iov;
+}
+
 
 void sockaddr_ntop(struct sockaddr_storage *ss, char *buf, socklen_t size)
 {

@@ -17,8 +17,15 @@
 /* default values */
 #define DEFAULT_PORT		"9999"
 #define DEFAULT_QUEUE_DEPTH	512
-#define DEFAULT_HANDLE_BUF_SZ	(1 << 18)	/* 256KB */
-#define DEFAULT_BATCH_SIZE	32
+
+#define MIN_BUF_SZ		(1 << 18)	/* 256KB */
+#define MIN_NR_BUFS		256		/* 64KB * 256 = 64MB */
+/* Bandwidth Delay Product for 100Gbps 1 msec is:
+ * 100 / 8 / 1000 * 1024 = 12.8MB. 32MB buffer is enough for that, for insance.
+ */
+
+#define DEFAULT_BATCH_SZ	32
+#define MAX_BATCH_SZ		64
 
 #define DEFAULT_LOCAL_ADDR	"::" /* in6-addr-any can handle both v6 and v4 */
 
@@ -30,7 +37,8 @@ struct opts {
 	char	*port;
 	int	queue_depth;
 	int 	severity;
-	int 	buf_sz;
+	int	buf_sz;		/* a buffer size to be registered to io_uring */
+	int	nr_bufs;	/* number of buffers to be registered to io_uring */
 	int 	batch_sz;
 
 
