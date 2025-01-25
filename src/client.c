@@ -211,9 +211,13 @@ static void connection_handle_append(struct connection_handle *ch)
 
 static time_t timespec_sub_nsec(struct timespec *after, struct timespec *before)
 {
-	time_t diff_nsec = ((after->tv_sec * 1000000000 + after->tv_nsec) - 
-			    (before->tv_sec * 1000000000 + before->tv_nsec));
-	return diff_nsec;
+	time_t a_nsec = (after->tv_sec * 1000000000 + after->tv_nsec);
+	time_t b_nsec = (before->tv_sec * 1000000000 + before->tv_nsec);
+
+	if (a_nsec == 0 || b_nsec == 0)
+		return 0;
+
+	return a_nsec - b_nsec;
 }
 
 void print_connection_handle_result(FILE *fp, struct connection_handle *ch)
@@ -255,8 +259,8 @@ static void print_result(FILE *fp)
 
 static int put_connect(void)
 {
-	struct io_uring_sqe *sqe = io_uring_get_sqe_always(ring);
 	struct connection_handle *ch;
+	struct io_uring_sqe *sqe;
 
 	if (cli.o->nr_flows > 0) {
 		/* number of flows to be done is specified. Don't
@@ -298,6 +302,7 @@ static int put_connect(void)
 		return -1;
 	}
 
+	sqe = io_uring_get_sqe_always(ring);
 	ch->state = CONNECTION_HANDLE_STATE_CONNECTING;
 	ch->event = EVENT_TYPE_CONNECT;
 	io_uring_prep_connect(sqe, ch->sock, (struct sockaddr *)&pa->saddr, pa->salen);
