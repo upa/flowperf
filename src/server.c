@@ -33,8 +33,8 @@ struct client_handle {
 	/* a handle for a client connection */
 	int	sock;
 	struct sockaddr_storage addr;	/* client address */
-	socklen_t 		addrlen;
-	char			addrstr[ADDRSTRLEN];
+	socklen_t	addrlen;
+	char		addrstr[ADDRSTRLEN];
 
 	/* state and uring event type */
 	int 	state;
@@ -182,11 +182,15 @@ static void put_write_rep_invalid(struct client_handle *ch)
 }
 
 
-static void purge_client_handle(struct client_handle *ch)
+static void close_client_handle(struct client_handle *ch)
 {
-	pr_debug("purge client handle %s", ch->addrstr);
+	pr_debug("%s: purge client handle", ch->addrstr);
 	if (ch->sock > 1)
 		close(ch->sock);
+	if (ch->buf) {
+		free(ch->buf);
+		ch->buf = NULL;
+	}
 	free(ch);
 }
 
@@ -196,7 +200,7 @@ static void process_client_handle_accepting(struct client_handle *ch,
 	if (ch->event != EVENT_TYPE_ACCEPT) {
 		pr_err("invalid state/event pair: state=%d event=%d",
 		       ch->state, ch->event);
-		purge_client_handle(ch);
+		close_client_handle(ch);
 		return;
 	}
 
@@ -207,7 +211,7 @@ static void process_client_handle_accepting(struct client_handle *ch,
 	 */
 	if (cqe->res < 0) {
 		pr_warn("accept: %s", strerror(-cqe->res));
-		purge_client_handle(ch);
+		close_client_handle(ch);
 		goto put_next_accept;
 	}
 	sockaddr_ntop(&ch->addr, ch->addrstr, ADDRSTRLEN);
@@ -237,18 +241,11 @@ void move_client_handle_flowing(struct client_handle *ch, ssize_t bytes)
 void move_client_handle_tcp_info(struct client_handle *ch)
 {
 	/* Start RPC TCP_INFO */
-	struct tcp_info info;
-	socklen_t infolen = sizeof(info);
 	int ret;
 
 	pr_debug("%s: RPC TCP_INFO", ch->addrstr);
 
-	if (getsockopt(ch->sock, IPPROTO_TCP, TCP_INFO, &info, &infolen) < 0) {
-		pr_warn("getsockopt(TCP_INFO): %s", strerror(errno));
-		memset(&info, 0, sizeof(info)); /* zero fill */
-	}
-
-	ret = build_tcp_info_string(&info, ch->buf, ch->buf_sz);
+	ret = build_tcp_info_string(ch->sock, ch->buf, ch->buf_sz);
 	if (ret < 0 || ch->buf_sz <= ret) {
 		pr_err("build_tcp_info_string failed: %d", ret);
 		put_write_rep_invalid(ch);
@@ -266,7 +263,7 @@ static void process_client_handle_accepted(struct client_handle *ch,
 	if (ch->event != EVENT_TYPE_WRITE && ch->event != EVENT_TYPE_READ) {
 		pr_err("invalid state/event pair: state=%d event=%d",
 		       ch->state, ch->event);
-		purge_client_handle(ch);
+		close_client_handle(ch);
 		return;
 	}
 
@@ -306,7 +303,7 @@ static void process_client_handle_accepted(struct client_handle *ch,
 	return;
 
 close:
-	purge_client_handle(ch);
+	close_client_handle(ch);
 }
 
 static void process_client_handle_flowing(struct client_handle *ch,
@@ -343,7 +340,7 @@ static void process_client_handle_flowing(struct client_handle *ch,
 	return;
 
 close:
-	purge_client_handle(ch);
+	close_client_handle(ch);
 }
 
 static void process_client_handle_tcp_info(struct client_handle *ch,
@@ -380,11 +377,11 @@ static void process_client_handle_tcp_info(struct client_handle *ch,
 	return;
 
 close:
-	purge_client_handle(ch);
+	close_client_handle(ch);
 }
 
 
-static int process_client_cqe(struct io_uring_cqe *cqe) 
+static void server_process_cqe(struct io_uring_cqe *cqe) 
 {
 	struct client_handle *ch = io_uring_cqe_get_data(cqe);
 
@@ -403,10 +400,8 @@ static int process_client_cqe(struct io_uring_cqe *cqe)
 		break;
 	default:
 		pr_err("invalid client handle state: %d", ch->state);
-		purge_client_handle(ch);
+		close_client_handle(ch);
 	}
-
-	return 0;
 }
 
 static int server_loop(void)
@@ -435,7 +430,7 @@ static int server_loop(void)
 		}
 
 		for (i = 0; i < nr_cqes; i++)
-			process_client_cqe(cqes[i]);
+			server_process_cqe(cqes[i]);
 
 		io_uring_cq_advance(ring, i);
 
@@ -469,6 +464,7 @@ int start_server(struct opts *o)
 	if (init_serv_io_uring() < 0)
 		return -1;
 
+	signal(SIGPIPE, SIG_IGN);
 	signal(SIGINT, sigint_handler);
 
 	return server_loop();

@@ -29,7 +29,9 @@ char *sockaddr_ntoa(struct sockaddr_storage *ss);
 #define SOL_TCP	6	/* SOL_TCP does not exist on linux/tcp.h */
 #endif
 
-/* put key=value ... string of tcp_info onto buf */
-int build_tcp_info_string(struct tcp_info *info, char *buf, size_t size);
+/* put key=value ... string of tcp_info of the sock onto buf */
+int build_tcp_info_string(int sock, char *buf, size_t size);
+
+#define TCP_INFO_STRLEN	128
 
 #endif

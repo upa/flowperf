@@ -6,6 +6,7 @@
 #include <arpa/inet.h>
 #include <liburing.h>
 
+
 #include <util.h>
 #include <print.h>
 
@@ -52,8 +53,16 @@ char *sockaddr_ntoa(struct sockaddr_storage *ss)
 }
 
 
-int build_tcp_info_string(struct tcp_info *info, char *buf, size_t size)
+int build_tcp_info_string(int sock, char *buf, size_t size)
 {
+	struct tcp_info info;
+	socklen_t infolen = sizeof(info);
+
+	if (getsockopt(sock, IPPROTO_TCP, TCP_INFO, &info, &infolen) < 0) {
+		pr_err("getsockopt(TCP_INFO): %s", strerror(errno));
+		memset(&info, 0, infolen);
+	}
+
 	/*
 	 * tcpi_sacked: the number of segments marked to be
 	 * transmitted by the selective ACK mechanism during the
@@ -69,10 +78,10 @@ int build_tcp_info_string(struct tcp_info *info, char *buf, size_t size)
 			"retr=%u "	/* tcpi_retransmits 	*/
 			"sego=%u "	/* tcpi_segs_out 	*/
 			"segi=%u\n",	/* tcpi_segs_in 	*/
-			info->tcpi_lost,
-			info->tcpi_sacked,
-			info->tcpi_retransmits,
-			info->tcpi_segs_out,
-			info->tcpi_segs_in
+			info.tcpi_lost,
+			info.tcpi_sacked,
+			info.tcpi_retransmits,
+			info.tcpi_segs_out,
+			info.tcpi_segs_in
 		);
 }

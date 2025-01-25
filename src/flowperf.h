@@ -78,14 +78,17 @@
  * or to WAIT.
  */
 
-#define CONNECTION_HANDLE_STATE_WAITING	4
-/* Sleep a while as flow interval gap time.
+#define CONNECTION_HANDLE_STATE_INTERVAL	4
+/* Sleep a while as flow interval time.
  *
  * Assumed Compeltion Event:
  * - EVENT_TYPE_TIMEOUT: wait until the posted timeout.
  *
- * After TIMEOUT completion occurs, move to the next flow benchmark.
+ * After TIMEOUT completion occurs, close the connection and start the
+ * next connection of an RPC.
  */
+
+#define CONNCTION_HANDLE_STATE_FINISHED		5
 
 #define EVENT_TYPE_ACCEPT	0
 #define EVENT_TYPE_CONNECT	1

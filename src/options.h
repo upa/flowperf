@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <netinet/in.h>
 
 #include <prob.h>
@@ -41,6 +42,7 @@ struct opts {
 	int     nr_flows;
 	int 	time;
 	int 	concurrency;
+	bool	server_tcp_info;	/* get tcp_info from the server side */
 
 	prob_list_t *addrs;
 	prob_list_t *flows;

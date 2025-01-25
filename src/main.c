@@ -29,6 +29,7 @@ static void usage()
 	       "    -n NUMBER       number of flows to be done on the benchmark\n"
 	       "    -t TIME         time (sec) of the benchmark, default 10 sec\n"
 	       "    -x CONCURRENCY  number of cunccurent flows\n"
+	       "    -T              get tcp_info from the server side for each RPC\n"
 	       "\n"
 	       "    -d ADDR_TXT     txt file contains 'ADDR PROBABLITY' per line\n"
 	       "    -D ADDR:PROB    dest address and its probability\n"
@@ -72,7 +73,7 @@ static int parse_args(int argc, char **argv, struct opts *o)
 
 #define OPTSTR_COMMON "scp:q:b:B:vh"
 #define OPTSTR_SERVER "a:"
-#define OPTSTR_CLIENT "n:t:x:d:D:f:F:i:I:"
+#define OPTSTR_CLIENT "n:t:x:Td:D:f:F:i:I:"
 #define OPTSTR OPTSTR_COMMON OPTSTR_SERVER OPTSTR_CLIENT
 
 	while ((ch = getopt(argc, argv, OPTSTR)) != -1) {
@@ -135,6 +136,10 @@ static int parse_args(int argc, char **argv, struct opts *o)
 				return -1;
 			}
 			break;
+		case 'T':
+			o->server_tcp_info = true;
+			break;
+
 		case 'd':
 			if (prob_list_load_text(o->addrs, optarg) < 0)
 				return -1;
