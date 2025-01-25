@@ -15,7 +15,6 @@
 #include <util.h>
 
 struct client {
-	bool	run;
 	struct opts *o;
 
 	int nr_flows_started;
@@ -243,13 +242,14 @@ static void close_connection_handle(struct connection_handle *ch)
 	pr_debug("%s: close connection handle", ch->pa->addrstr);
 	if (ch->sock > 1)
 		close(ch->sock);
+	free(ch->buf);
 
 	if (cli.o->nr_flows) {
 		/* number of flows to be done is specified */
 		cli.nr_flows_finished++;
 		if (cli.nr_flows_finished >= cli.o->nr_flows) {
 			/* specified number of flows done. finish the benchmark */
-			cli.run = false;
+			stop_running();
 			return;
 		}
 	}
@@ -282,7 +282,8 @@ static void process_connection_handle_connecting(struct connection_handle *ch,
 		close_connection_handle(ch);
 		return;
 	}
-	pr_info("%s: connected, start flow %lu bytes", ch->pa->addrstr, ch->pf->bytes);
+	pr_info("%s: connected, start RPC FLOW %lu bytes",
+		ch->pa->addrstr, ch->pf->bytes);
 
 	ch->state = CONNECTION_HANDLE_STATE_FLOWING;
 	ch->remain_bytes = ch->pf->bytes;
@@ -452,10 +453,12 @@ static int client_loop(void)
 	}
 
 	pr_notice("start the client loop");
-	while (cli.run) {
+	while (is_running()) {
 		nr_cqes = io_uring_peek_batch_cqe(ring, cqes, cli.o->batch_sz);
 		if (nr_cqes == 0) {
 			if ((ret = io_uring_wait_cqe(ring, &cqes[0])) < 0) {
+				if (ret == -EINTR)
+					break;
 				pr_err("io_uring_wait_cqe: %s", strerror(-ret));
 				return -1;
 			}
@@ -473,14 +476,16 @@ static int client_loop(void)
 		}
 	}
 
+	pr_info("exit iouring");
+	io_uring_queue_exit(ring);
+
 	return 0;
 }
 
 
 static void sigint_handler(int signo) {
     pr_notice("^C pressed. Shutting down.");
-    cli.run = false;
-    io_uring_queue_exit(ring);
+    stop_running();
 }
 
 
@@ -522,7 +527,7 @@ int start_client(struct opts *o)
 	if (init_client_io_uring() < 0)
 		return -1;
 
-	cli.run = true;
+	start_running();
 
 	signal(SIGPIPE, SIG_IGN);
 	signal(SIGINT, sigint_handler);

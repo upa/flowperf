@@ -85,3 +85,20 @@ int build_tcp_info_string(int sock, char *buf, size_t size)
 			info.tcpi_segs_in
 		);
 }
+
+
+/* runnig/stop flag */
+static volatile sig_atomic_t run = 0;
+
+void start_running(void) {
+	run = 1;
+}
+
+void stop_running(void) {
+	run = 0;
+}
+
+bool is_running(void)
+{
+	return (run != 0);
+}

@@ -14,9 +14,9 @@
 #include <server.h>
 #include <util.h>
 
+
 struct server {
 	int 	sock;
-	bool	run;
 	struct opts *o;
 
 	struct io_uring ring;
@@ -419,10 +419,12 @@ static int server_loop(void)
 	}
 
 	pr_notice("start the server loop");
-	while (serv.run) {
+	while (is_running()) {
 		nr_cqes = io_uring_peek_batch_cqe(ring, cqes, serv.o->batch_sz);
 		if (nr_cqes == 0) {
 			if ((ret = io_uring_wait_cqe(ring, &cqes[0])) < 0) {
+				if (ret == -EINTR)
+					break;
 				pr_err("io_uring_wait_cqe: %s", strerror(-ret));
 				return -1;
 			}
@@ -440,22 +442,23 @@ static int server_loop(void)
 		}
 	}
 	
+	pr_info("close socket and exit iouring");
+	close(serv.sock);
+	io_uring_queue_exit(ring);
+
 	return 0;
 }
 
 
 static void sigint_handler(int signo) {
     pr_notice("^C pressed. Shutting down.");
-    serv.run = false;
-    close(serv.sock);
-    io_uring_queue_exit(ring);
+    stop_running();
 }
 
 
 int start_server(struct opts *o)
 {
 	memset(&serv, 0, sizeof(serv));
-	serv.run = true;
 	serv.o = o;
 
 	if (init_serv_socket() < 0)
@@ -463,6 +466,8 @@ int start_server(struct opts *o)
 
 	if (init_serv_io_uring() < 0)
 		return -1;
+
+	start_running();
 
 	signal(SIGPIPE, SIG_IGN);
 	signal(SIGINT, sigint_handler);

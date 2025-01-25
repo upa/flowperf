@@ -34,4 +34,12 @@ int build_tcp_info_string(int sock, char *buf, size_t size);
 
 #define TCP_INFO_STRLEN	128
 
+
+/* stop flag */
+#include <stdbool.h>
+
+void start_running(void);
+void stop_running(void);
+bool is_running(void);
+
 #endif
