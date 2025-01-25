@@ -26,8 +26,8 @@ static struct io_uring *ring = &cli.ring;
 
 #define ADDRSTRLEN	64
 
+/* o->addrs->probs[n].data */
 typedef struct prob_addr_struct {
-	/* o->addrs->probs[n].data */
 	struct sockaddr_storage saddr;
 	socklen_t	salen;
 	int		family;
@@ -36,13 +36,13 @@ typedef struct prob_addr_struct {
 	char 		addrstr[ADDRSTRLEN];
 } prob_addr_t;
 
+/* o->flows->probs[n].data */
 typedef struct prob_flow_struct {
-	/* o->flows->probs[n].data */
 	size_t bytes;
 } prob_flow_t;
 
+/* o->intervals->probs[n].data */
 typedef struct prob_interval_struct {
-	/* o->intervals->probs[n].data */
 	time_t interval;
 } prob_interval_t;
 
@@ -53,7 +53,7 @@ static int prob_list_iter_addr(prob_t *prob)
 	prob_addr_t *pa;
 	int ret;
 
-	/* resolve prob->key as addr of hostname to sockaddr for
+	/* resolve prob->key as addr and fill sockaddr for
 	 * connect(). */
 
 	if ((pa = malloc(sizeof(*pa))) == NULL) {
