@@ -6,6 +6,7 @@
 #include <netdb.h>
 #include <time.h>
 #include <signal.h>
+#include <assert.h>
 #include <linux/tcp.h>
 
 #include <liburing.h>
@@ -127,31 +128,20 @@ static int init_serv_io_uring()
 
 /* client handle processing */
 
-
-static int put_accept(void)
+static void put_accept_multishot(void)
 {
 	struct io_uring_sqe *sqe = io_uring_get_sqe_always(ring);
-	struct client_handle *ch;
+	static struct client_handle ch = {}; /* handle just for accept() */
 
-	pr_debug("put a new accept() event");
+	pr_debug("put accept() multishot");
 
-	/* put a new client handle instance */
-	if ((ch = malloc(sizeof(*ch) + serv.o->buf_sz)) == NULL) {
-		pr_err("malloc: %s", strerror(errno));
-		return -1;
-	}
-	memset(ch, 0, sizeof(*ch));
-	memset(ch->send_buf, '!', serv.o->buf_sz);
-	
-	ch->state = CLIENT_HANDLE_STATE_ACCEPTING;
-	ch->event = EVENT_TYPE_ACCEPT;
-	ch->addrlen = sizeof(ch->addr);
+	ch.state = CLIENT_HANDLE_STATE_ACCEPTING;
+	ch.event = EVENT_TYPE_ACCEPT;
+	ch.addrlen = sizeof(ch.addr);
 
-	io_uring_prep_accept(sqe, serv.sock,
-			     (struct sockaddr *)&ch->addr, &ch->addrlen, 0);
-	io_uring_sqe_set_data(sqe, ch);
-
-	return 0;
+	io_uring_prep_multishot_accept(sqe, serv.sock,
+				       (struct sockaddr *)&ch.addr, &ch.addrlen, 0);
+	io_uring_sqe_set_data(sqe, &ch);
 }
 
 static void put_read(struct client_handle *ch)
@@ -198,39 +188,42 @@ static void close_client_handle(struct client_handle *ch)
 	free(ch);
 }
 
-static void process_client_handle_accepting(struct client_handle *ch,
+static void process_client_handle_accepting(struct client_handle *ch_accept,
 					    struct io_uring_cqe *cqe)
 {
-	if (ch->event != EVENT_TYPE_ACCEPT) {
-		pr_err("invalid state/event pair: state=%d event=%d",
-		       ch->state, ch->event);
-		close_client_handle(ch);
-		return;
-	}
+	struct client_handle *ch;
 
-	/* handle is ACCEPTING, and accept event completed. The next
-	 * state is ACCEPTED, and put a read event for waiting an RPC
-	 * request. In addition, put a new accept event for a next
-	 * incomming connection.
+	assert(ch_accept->event == EVENT_TYPE_ACCEPT);
+
+	/* multishot accept() returns a new socket. allocate a new
+	 * client_handle, and put read for waiting an RPC request.
 	 */
 	if (cqe->res < 0) {
 		pr_warn("accept: %s", strerror(-cqe->res));
-		close_client_handle(ch);
-		goto put_next_accept;
+		return;
+	}
+	if ((ch = malloc(sizeof(*ch) + serv.o->buf_sz)) == NULL) {
+		pr_err("malloc: %s", strerror(errno));
+		close(cqe->res);
+		return;
+	}
+	memset(ch, 0, sizeof(*ch));
+	memset(ch->send_buf, '!', serv.o->buf_sz);
+	ch->sock = cqe->res;
+	ch->addrlen = sizeof(ch->addr);
+	if (getsockname(ch->sock, (struct sockaddr *)&ch->addr, &ch->addrlen) < 0) {
+		pr_err("getsockname: %s", strerror(errno));
+		return;
 	}
 	sockaddr_ntop(&ch->addr, ch->addrstr, ADDRSTRLEN);
 	pr_info("%s: new connection accepted", ch->addrstr);
 
-	ch->sock = cqe->res;
 	int v = 1;
 	if (setsockopt(ch->sock, SOL_TCP, TCP_NODELAY, &v, sizeof(v)) < 0)
 		pr_warn("%s: setoskcopt(TCP_NODELAY): %s", ch->addrstr, strerror(errno));
 
 	ch->state = CLIENT_HANDLE_STATE_ACCEPTED;
 	put_read(ch);
-
-put_next_accept:
-	put_accept();
 }
 
 void move_client_handle_flowing(struct client_handle *ch, ssize_t bytes)
@@ -423,9 +416,7 @@ static int server_loop(void)
 	unsigned nr_cqes, i;
 	int ret;
 
-	pr_info("put the first accept() event");
-	if (put_accept() < 0)
-		return -1;
+	put_accept_multishot();
 	if ((ret = io_uring_submit(ring)) < 0) {
 		pr_err("io_uring_submit: %s", strerror(-ret));
 		return -1;
