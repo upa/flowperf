@@ -7,6 +7,10 @@ project(flowperf
 add_executable(flowperf
 	src/main.c src/server.c src/client.c src/prob.c src/print.c src/util.c)
 target_include_directories(flowperf
-	PRIVATE ${flowperf_SOURCE_DIR}/src)
+	PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(flowperf uring)
 target_compile_options(flowperf PRIVATE "-Wall")
+
+# copy scripts to build directory
+configure_file(${CMAKE_SOURCE_DIR}/scripts/flowperf-summary
+	${CMAKE_BINARY_DIR}/ COPYONLY)
