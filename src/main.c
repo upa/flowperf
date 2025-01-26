@@ -35,16 +35,16 @@ static void usage()
 	       "                    to io_uring via io_uring_register_buf_ring()\n"
 	       "    -T              get tcp_info from the server side for each RPC\n"
 	       "\n"
-	       "    -d ADDR_TXT     txt file contains 'ADDR PROBABLITY' per line\n"
-	       "    -D ADDR:PROB    dest address and its probability\n"
+	       "    -d ADDR:PROB    dest address and its probability\n"
+	       "    -D ADDR_TXT     txt file contains 'ADDR PROBABLITY' per line\n"
 	       "\n"
-	       "    -f FLOW_TXT     txt file contains 'FLOWSIZE PROBABILITY' per line\n"
-	       "    -F FLOW_SZ:PROB flow size (byte) and its probablity\n"
+	       "    -f FLOW_SZ:PROB flow size (byte) and its probablity\n"
+	       "    -F FLOW_TXT     txt file contains 'FLOWSIZE PROBABILITY' per line\n"
 	       "\n"
-	       "    -i INTVAL_TXT   txt file contains 'INTERVAL PROBABLITY' per line\n"
-	       "    -I INTVAL:PROB  interval (nsec) and its probablity\n"
+	       "    -i INTVAL:PROB  interval (nsec) and its probablity\n"
+	       "    -I INTVAL_TXT   txt file contains 'INTERVAL PROBABLITY' per line\n"
 	       "\n\n",
-	       MIN_BUF_SZ / 1024 / 1024,
+	       MIN_BUF_SZ / 1024,
 	       MIN_NR_BUFS);
 }
 
@@ -78,9 +78,9 @@ static int parse_args(int argc, char **argv, struct opts *o)
 	if ((o->intervals = prob_list_alloc()) == NULL)
 		return -1;
 
-#define OPTSTR_COMMON "scp:q:B:N:b:vh"
+#define OPTSTR_COMMON "scp:q:B:b:vh"
 #define OPTSTR_SERVER "a:"
-#define OPTSTR_CLIENT "n:t:x:Td:D:f:F:i:I:"
+#define OPTSTR_CLIENT "n:t:x:N:Td:D:f:F:i:I:"
 #define OPTSTR OPTSTR_COMMON OPTSTR_SERVER OPTSTR_CLIENT
 
 	while ((ch = getopt(argc, argv, OPTSTR)) != -1) {
@@ -104,13 +104,6 @@ static int parse_args(int argc, char **argv, struct opts *o)
 				       optarg, MIN_BUF_SZ);
 			}
 			break;
-		case 'N':
-			o->nr_bufs = atoi(optarg);
-			if (o->nr_bufs < MIN_NR_BUFS) {
-				pr_err("invalid nr_bufs %s (must be ge %d)",
-				       optarg, MIN_NR_BUFS);
-			}
-			break;
 		case 'b':
 			o->batch_sz = atoi(optarg);
 			if (o->batch_sz < 1 || MAX_BATCH_SZ < o->batch_sz) {
@@ -126,11 +119,11 @@ static int parse_args(int argc, char **argv, struct opts *o)
 			usage();
 			return -1;
 
-		case 'a':
+		case 'a': /* server options */
 			o->local_addr = optarg;
 			break;
 
-		case 'n':
+		case 'n': /* client options */
 			o->nr_flows = atoi(optarg);
 			if (o->nr_flows < 0) {
 				pr_err("invalid number of flows: %s", optarg);
@@ -151,15 +144,18 @@ static int parse_args(int argc, char **argv, struct opts *o)
 				return -1;
 			}
 			break;
+		case 'N':
+			o->nr_bufs = atoi(optarg);
+			if (o->nr_bufs < MIN_NR_BUFS) {
+				pr_err("invalid nr_bufs %s (must be ge %d)",
+				       optarg, MIN_NR_BUFS);
+			}
+			break;
 		case 'T':
 			o->server_tcp_info = true;
 			break;
 
 		case 'd':
-			if (prob_list_load_text(o->addrs, optarg) < 0)
-				return -1;
-			break;
-		case 'D':
 			c = strrchr(optarg, ':');
 			if (!c) {
 				pr_err("invalid addr:prob format: %s", optarg);
@@ -169,11 +165,12 @@ static int parse_args(int argc, char **argv, struct opts *o)
 			if (prob_list_append(o->addrs, atof(c+1), optarg) < 0)
 				return -1;
 			break;
-		case 'f':
-			if (prob_list_load_text(o->flows, optarg) < 0)
+		case 'D':
+			if (prob_list_load_text(o->addrs, optarg) < 0)
 				return -1;
 			break;
-		case 'F':
+
+		case 'f':
 			c = strrchr(optarg, ':');
 			if (!c) {
 				pr_err("invalid flow:prob format: %s", optarg);
@@ -183,11 +180,12 @@ static int parse_args(int argc, char **argv, struct opts *o)
 			if (prob_list_append(o->flows, atof(c+1), optarg) < 0)
 				return -1;
 			break;
-		case 'i':
-			if (prob_list_load_text(o->intervals, optarg) < 0)
+		case 'F':
+			if (prob_list_load_text(o->flows, optarg) < 0)
 				return -1;
 			break;
-		case 'I':
+
+		case 'i':
 			c = strrchr(optarg, ':');
 			if (!c) {
 				pr_err("invalid interval:prob format: %s", optarg);
@@ -197,6 +195,11 @@ static int parse_args(int argc, char **argv, struct opts *o)
 			if (prob_list_append(o->intervals, atof(c+1), optarg) < 0)
 				return -1;
 			break;
+		case 'I':
+			if (prob_list_load_text(o->intervals, optarg) < 0)
+				return -1;
+			break;
+
 		default:
 			usage();
 			return -1;
