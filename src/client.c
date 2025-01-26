@@ -222,6 +222,8 @@ static time_t timespec_sub_nsec(struct timespec *after, struct timespec *before)
 	return a_nsec - b_nsec;
 }
 
+#define timespec_nsec(ts) ((ts)->tv_sec * 1000000000 + (ts)->tv_nsec)
+
 void print_connection_handle_result(FILE *fp, struct connection_handle *ch)
 {
 	char buf[512];
@@ -231,12 +233,16 @@ void print_connection_handle_result(FILE *fp, struct connection_handle *ch)
 		       "state=%c "
 		       "dst=%s "
 		       "flow_size=%lu "
+		       "start=%lu "
+		       "end=%lu "
 		       "time_conn=%lu "
 		       "time_flow=%lu "
 		       "tcp_c=%s",
 		       connection_handle_state_name(ch->state),
 		       ch->pa->addrstr,
 		       ch->pf->bytes,
+		       timespec_nsec(&ch->ts_start),
+		       timespec_nsec(&ch->ts_flow_end),
 		       timespec_sub_nsec(&ch->ts_flow_start, &ch->ts_start),
 		       timespec_sub_nsec(&ch->ts_flow_end, &ch->ts_flow_start),
 		       ch->tcp_info_c
