@@ -233,6 +233,7 @@ void print_connection_handle_result(FILE *fp, struct connection_handle *ch)
 		       "state=%c "
 		       "dst=%s "
 		       "flow_size=%lu "
+		       "remain=%lu "
 		       "start=%lu "
 		       "end=%lu "
 		       "time_conn=%lu "
@@ -241,6 +242,7 @@ void print_connection_handle_result(FILE *fp, struct connection_handle *ch)
 		       connection_handle_state_name(ch->state),
 		       ch->pa->addrstr,
 		       ch->pf->bytes,
+		       ch->remain_bytes,
 		       timespec_nsec(&ch->ts_start),
 		       timespec_nsec(&ch->ts_flow_end),
 		       timespec_sub_nsec(&ch->ts_flow_start, &ch->ts_start),
