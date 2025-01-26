@@ -236,8 +236,8 @@ void print_connection_handle_result(FILE *fp, struct connection_handle *ch)
 		       "remain=%lu "
 		       "start=%lu "
 		       "end=%lu "
-		       "time_conn=%lu "
-		       "time_flow=%lu "
+		       "time2conn=%lu "
+		       "time2flow=%lu "
 		       "tcp_c=%s",
 		       connection_handle_state_name(ch->state),
 		       ch->pa->addrstr,
@@ -437,18 +437,19 @@ static void process_connection_handle_flowing(struct connection_handle *ch,
 	switch (ch->event) {
 	case EVENT_TYPE_RECV:
 		/* receiving flow */
-		if (cqe->res <= 0) {
-			pr_warn("%s: recv: %s", ch->pa->addrstr, strerror(-cqe->res));
-			close_connection_handle(ch);
-			return;
-		}
-
 		/* put the recv buffer back to the ring */
 		buf_id = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
 		io_uring_buf_ring_add(cli.recv_buf_ring, cli.recv_bufs[buf_id],
 				      cli.o->buf_sz, buf_id,
 				      io_uring_buf_ring_mask(cli.o->nr_bufs), 0);
 		io_uring_buf_ring_advance(cli.recv_buf_ring, 1);
+
+		/* check recv failed or not */
+		if (cqe->res <= 0) {
+			pr_warn("%s: recv: %s", ch->pa->addrstr, strerror(-cqe->res));
+			close_connection_handle(ch);
+			return;
+		}
 
 		/* ok, consume received bytes */
 		ch->remain_bytes -= cqe->res;
@@ -499,6 +500,14 @@ static void process_connection_handle_tcp_info(struct connection_handle *ch,
 	switch (ch->event) {
 	case EVENT_TYPE_RECV:
 		pr_debug("%s: server tcp_info done", ch->pa->addrstr);
+
+		/* put the recv buffer back to the ring */
+		int buf_id = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
+		io_uring_buf_ring_add(cli.recv_buf_ring, cli.recv_bufs[buf_id],
+				      cli.o->buf_sz, buf_id,
+				      io_uring_buf_ring_mask(cli.o->nr_bufs), 0);
+		io_uring_buf_ring_advance(cli.recv_buf_ring, 1);
+
 		if (cqe->res <= 0) {
 			pr_warn("%s: recv: %s", ch->pa->addrstr, strerror(cqe->res));
 			close_connection_handle(ch);
