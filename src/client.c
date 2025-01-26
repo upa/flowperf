@@ -492,7 +492,7 @@ static void process_connection_handle_tcp_info(struct connection_handle *ch,
 	case EVENT_TYPE_RECV:
 		pr_debug("%s: server tcp_info done", ch->pa->addrstr);
 		if (cqe->res <= 0) {
-			pr_warn("%s: read: %s", ch->pa->addrstr, strerror(cqe->res));
+			pr_warn("%s: recv: %s", ch->pa->addrstr, strerror(cqe->res));
 			close_connection_handle(ch);
 			return;
 		}

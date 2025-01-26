@@ -16,13 +16,10 @@ static void usage()
 	       "\n"
 	       "  Common options\n"
 	       "    -p PORT         port number\n"
-	       "    -q QUEUE_DEPTH  iouring queue depth\n"
-	       "    -B BUF_SIZE     size of a buffer region (default 64KB)\n"
-	       "    -N NR_BUFS      number of buffer regions(default 512):\n"
-	       "                    BUF_SIZE x NR_BUFS memory regions are registered to "
-	       "                    io_uring by io_uring_register_buffers()\n"
+	       "    -q QUEUE_DEPTH  io_uring queue depth\n"
+	       "    -B BUF_SIZE     size of a buffer region (default %dKB)\n"
 	       "\n"
-	       "    -b BATCH_SIZE   batch size for processing io uring\n"
+	       "    -b BATCH_SIZE   batch size for processing io_uring\n"
 	       "    -v              increment verbose output level\n"
 	       "    -h              print this help\n"
 	       "\n"
@@ -33,6 +30,9 @@ static void usage()
 	       "    -n NUMBER       number of flows to be done on the benchmark\n"
 	       "    -t TIME         time (sec) of the benchmark, default 10 sec\n"
 	       "    -x CONCURRENCY  number of cunccurent flows\n"
+	       "    -N NR_BUFS      number of buffer regions for recv (default %d):\n"
+	       "                    BUF_SIZE x NR_BUFS memory regions are registered\n"
+	       "                    to io_uring via io_uring_register_buf_ring()\n"
 	       "    -T              get tcp_info from the server side for each RPC\n"
 	       "\n"
 	       "    -d ADDR_TXT     txt file contains 'ADDR PROBABLITY' per line\n"
@@ -43,7 +43,9 @@ static void usage()
 	       "\n"
 	       "    -i INTVAL_TXT   txt file contains 'INTERVAL PROBABLITY' per line\n"
 	       "    -I INTVAL:PROB  interval (nsec) and its probablity\n"
-	       "\n\n");
+	       "\n\n",
+	       MIN_BUF_SZ / 1024 / 1024,
+	       MIN_NR_BUFS);
 }
 
 

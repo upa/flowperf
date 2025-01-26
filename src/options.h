@@ -19,10 +19,7 @@
 #define DEFAULT_QUEUE_DEPTH	512
 
 #define MIN_BUF_SZ		(1 << 18)	/* 256KB */
-#define MIN_NR_BUFS		256		/* 64KB * 256 = 64MB */
-/* Bandwidth Delay Product for 100Gbps 1 msec is:
- * 100 / 8 / 1000 * 1024 = 12.8MB. 32MB buffer is enough for that, for insance.
- */
+#define MIN_NR_BUFS		512		/* 256KB * 512 = 128MB */
 
 #define DEFAULT_BATCH_SZ	32
 #define MAX_BATCH_SZ		64
