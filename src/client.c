@@ -501,8 +501,12 @@ static void process_connection_handle_tcp_info(struct connection_handle *ch,
 	case EVENT_TYPE_RECV:
 		pr_debug("%s: server tcp_info done", ch->pa->addrstr);
 
-		/* put the recv buffer back to the ring */
+		/* copy recv buf to tcp_info_s */
 		int buf_id = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
+		if (cqe->res > 0)
+			strncpy(ch->tcp_info_s, cli.recv_bufs[buf_id], cqe->res);
+
+		/* put the recv buffer back to the ring */
 		io_uring_buf_ring_add(cli.recv_buf_ring, cli.recv_bufs[buf_id],
 				      cli.o->buf_sz, buf_id,
 				      io_uring_buf_ring_mask(cli.o->nr_bufs), 0);
@@ -513,6 +517,7 @@ static void process_connection_handle_tcp_info(struct connection_handle *ch,
 			close_connection_handle(ch);
 			return;
 		}
+
 		move_connection_handle_interval(ch);
 		break;
 
