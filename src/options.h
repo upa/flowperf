@@ -41,7 +41,7 @@ struct opts {
 
 	/* server options */
 	char	*local_addr;
-
+	bool	send_zero_copy;
 
 	/* client options */
 	int     nr_flows;

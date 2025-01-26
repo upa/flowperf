@@ -25,6 +25,7 @@ static void usage()
 	       "\n"
 	       "  Server mode options\n"
 	       "    -a ADDRESS        local address to bind\n"
+	       "    -z                use tx zero copy\n"
 	       "\n"
 	       "  Client mode options\n"
 	       "    -n NUMBER       number of flows to be done on the benchmark\n"
@@ -79,7 +80,7 @@ static int parse_args(int argc, char **argv, struct opts *o)
 		return -1;
 
 #define OPTSTR_COMMON "scp:q:B:b:vh"
-#define OPTSTR_SERVER "a:"
+#define OPTSTR_SERVER "a:z"
 #define OPTSTR_CLIENT "n:t:x:N:Td:D:f:F:i:I:"
 #define OPTSTR OPTSTR_COMMON OPTSTR_SERVER OPTSTR_CLIENT
 
@@ -121,6 +122,9 @@ static int parse_args(int argc, char **argv, struct opts *o)
 
 		case 'a': /* server options */
 			o->local_addr = optarg;
+			break;
+		case 'z':
+			o->send_zero_copy = true;
 			break;
 
 		case 'n': /* client options */

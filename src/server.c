@@ -20,6 +20,8 @@ struct server {
 	int 	sock;
 	struct opts *o;
 	struct io_uring ring;
+
+	struct iovec send_iov[1];
 };
 
 static struct server serv;
@@ -53,7 +55,7 @@ struct client_handle {
 	char	msg_buf[MSG_BUF_SZ];
 
 	ssize_t	remain_bytes;	/* remain bytes to be xmitted */
-	char	send_buf[0];	/* buf for send_zc follows the handle */
+	char	send_buf[0];	/* buf for send(_zc) follows the handle */
 };
 
 
@@ -122,6 +124,19 @@ static int init_serv_io_uring()
 		return -1;
 	}
 
+	/* allocate and register a single send buffer for send_zc_fixed */
+	serv.send_iov[0].iov_len = serv.o->buf_sz;
+	if (posix_memalign(&serv.send_iov[0].iov_base, sysconf(_SC_PAGESIZE),
+			   serv.o->buf_sz) < 0) {
+		pr_err("posix_memalign: %s", strerror(errno));
+		return -1;
+	}
+
+	if ((ret = io_uring_register_buffers(ring, serv.send_iov, 1)) < 0) {
+		pr_err("io_uring_register_buffers: %s", strerror(-ret));
+		return -1;
+	}
+
 	return 0;
 }
 
@@ -172,11 +187,16 @@ static void put_write_rep_invalid(struct client_handle *ch)
 	io_uring_sqe_set_data(sqe, ch);
 }
 
-static void put_send_zc(struct client_handle *ch, size_t len)
+static void put_send(struct client_handle *ch, size_t len)
 {
 	struct io_uring_sqe *sqe = io_uring_get_sqe_always(ring);
-	ch->event = EVENT_TYPE_SEND_ZC;
-	io_uring_prep_send_zc(sqe, ch->sock, ch->send_buf, len, 0, 0);
+	ch->event = EVENT_TYPE_SEND;
+	if (serv.o->send_zero_copy)
+		io_uring_prep_send_zc_fixed(sqe, ch->sock,
+					    serv.send_iov[0].iov_base,
+					    len, 0, 0, 0);
+	else
+		io_uring_prep_send(sqe, ch->sock, ch->send_buf, len, 0);
 	io_uring_sqe_set_data(sqe, ch);
 }
 
@@ -232,7 +252,7 @@ void move_client_handle_flowing(struct client_handle *ch, ssize_t bytes)
 	pr_debug("%s: START FLOW %zd", ch->addrstr, bytes);
 	ch->state = CLIENT_HANDLE_STATE_FLOWING;
 	ch->remain_bytes = bytes;
-	put_send_zc(ch, min(ch->remain_bytes, serv.o->buf_sz));
+	put_send(ch, min(ch->remain_bytes, serv.o->buf_sz));
 }
 
 void move_client_handle_tcp_info(struct client_handle *ch)
@@ -305,23 +325,17 @@ close:
 static void process_client_handle_flowing(struct client_handle *ch,
 					  struct io_uring_cqe *cqe)
 {
-	if (ch->event != EVENT_TYPE_SEND_ZC) {
+	if (ch->event != EVENT_TYPE_SEND) {
 		pr_err("invalid state/event pair: state=%d event=%d",
 		       ch->state, ch->event);
 		close_client_handle(ch);
 		return;
 	}
 
-	/* handle is FLOWING. A send_zc rises complitions. 
+	/* handle is FLOWING. send or send_zc raises completions.
 	 */
 	if (cqe->res < 0) {
-		if (!(cqe->flags & IORING_CQE_F_MORE)) {
-			/* not multi CQEs && send return < 0 vlue.
-			 * close the connection due to error. */
-			pr_notice("%s: send_zc: %s, close connection",
-				  ch->addrstr, strerror(-cqe->res));
-			close_client_handle(ch);
-		} else {
+		if (cqe->flags & IORING_CQE_F_MORE) {
 			/* multi CQEs for send_zc. defer closing the
 			 * socket until cqe with IORING_CQE_F_NOTIF
 			 * has come.
@@ -329,6 +343,12 @@ static void process_client_handle_flowing(struct client_handle *ch,
 			pr_notice("%s: send_zc: %s, prepare for closing connection",
 				  ch->addrstr, strerror(-cqe->res));
 			ch->send_zc_failed = 1;
+		} else {
+			/* not multi CQEs && send return < 0 vlue.
+			 * close the connection due to error. */
+			pr_notice("%s: send: %s, close connection",
+				  ch->addrstr, strerror(-cqe->res));
+			close_client_handle(ch);
 		}
 		return;
 	}
@@ -343,8 +363,8 @@ static void process_client_handle_flowing(struct client_handle *ch,
 		return; /* more cqe for the last write (send_zc) will come */
 
 	if (ch->remain_bytes > 0) {
-		/* we need to send more bytes. put a new send_zc */
-		put_send_zc(ch, min(ch->remain_bytes, serv.o->buf_sz));
+		/* we need to send more bytes. put a new send */
+		put_send(ch, min(ch->remain_bytes, serv.o->buf_sz));
 	} else {
 		/* all bytes transfered */
 		pr_debug("%s: RPC FLOW finished", ch->addrstr);
