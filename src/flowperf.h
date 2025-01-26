@@ -88,7 +88,10 @@
  * next connection of an RPC.
  */
 
-#define CONNCTION_HANDLE_STATE_DONE		5
+
+#define CONNECTION_HANDLE_STATE_CLOSING		5
+#define CONNECTION_HANDLE_STATE_DONE		6
+
 
 
 inline static char connection_handle_state_name(int state)
@@ -102,7 +105,9 @@ inline static char connection_handle_state_name(int state)
 		return 't';
 	case CONNECTION_HANDLE_STATE_INTERVAL:
 		return 'i';
-	case CONNCTION_HANDLE_STATE_DONE:
+	case CONNECTION_HANDLE_STATE_CLOSING:
+		return 'e';
+	case CONNECTION_HANDLE_STATE_DONE:
 		return 'd';
 	}
 	return 'x';
@@ -116,7 +121,7 @@ inline static char connection_handle_state_name(int state)
 #define EVENT_TYPE_SEND_ZC	4
 #define EVENT_TYPE_RECV		5
 #define EVENT_TYPE_TIMEOUT	6
-
+#define EVENT_TYPE_CANCEL	7
 
 
 

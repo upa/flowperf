@@ -310,15 +310,6 @@ static int put_connect(void)
 	return 0;
 }
 
-static void put_read(struct connection_handle *ch, void *buf, size_t len)
-{
-	struct io_uring_sqe *sqe = io_uring_get_sqe_always(ring);
-
-	ch->event = EVENT_TYPE_READ;
-	io_uring_prep_read(sqe, ch->sock, buf, len, 0);
-	io_uring_sqe_set_data(sqe, ch);
-}
-
 static void put_write(struct connection_handle *ch, size_t len)
 {
 	struct io_uring_sqe *sqe = io_uring_get_sqe_always(ring);
@@ -327,11 +318,11 @@ static void put_write(struct connection_handle *ch, size_t len)
 	io_uring_sqe_set_data(sqe, ch);
 }
 
-static void put_recv(struct connection_handle *ch)
+static void put_recv_multishot(struct connection_handle *ch)
 {
 	struct io_uring_sqe *sqe = io_uring_get_sqe_always(ring);
 	ch->event = EVENT_TYPE_RECV;
-	io_uring_prep_recv(sqe, ch->sock, NULL, 0, 0);
+	io_uring_prep_recv_multishot(sqe, ch->sock, NULL, 0, 0);
 	sqe->flags |= IOSQE_BUFFER_SELECT;
 	sqe->buf_group = 0;
 	io_uring_sqe_set_data(sqe, ch);
@@ -339,9 +330,23 @@ static void put_recv(struct connection_handle *ch)
 
 static void close_connection_handle(struct connection_handle *ch)
 {
-	pr_debug("%s: close connection handle", ch->pa->addrstr);
-	if (ch->sock > 1)
-		close(ch->sock);
+	struct io_uring_sqe *sqe = io_uring_get_sqe_always(ring);
+
+	/* we need to issue io_uring cancel to stop recv_multishot */
+	pr_debug("%s: cancel recv multishot for fd=%d", ch->pa->addrstr, ch->sock);
+	ch->event = EVENT_TYPE_CANCEL;
+	ch->state = CONNECTION_HANDLE_STATE_CLOSING;
+	io_uring_prep_cancel_fd(sqe, ch->sock, 0);
+	io_uring_sqe_set_data(sqe, ch);
+}
+
+static void process_connection_handle_closing(struct connection_handle *ch,
+					      struct io_uring_cqe *cqe)
+{
+	pr_debug("%s: close connection", ch->pa->addrstr);
+
+	ch->state = CONNECTION_HANDLE_STATE_DONE;
+	close(ch->sock);
 
 	if (cli.o->nr_flows) {
 		/* number of flows to be done is specified */
@@ -354,13 +359,12 @@ static void close_connection_handle(struct connection_handle *ch)
 	}
 
 	/* On the client side, always call close_connection_handle()
-	 * when a connection finished regardless of the RPC completed
-	 * or failed. Then, close_connection_handle() puts a new
-	 * connect() to start the next RPC.
+	 * and process_connection_handle_closing() is called. When a
+	 * connection finished regardless of the RPC completed or
+	 * failed. Then, put a new connect() to start the next RPC.
 	 */
 	put_connect();
 }
-
 
 static void process_connection_handle_connecting(struct connection_handle *ch,
 						 struct io_uring_cqe *cqe)
@@ -381,8 +385,10 @@ static void process_connection_handle_connecting(struct connection_handle *ch,
 		close_connection_handle(ch);
 		return;
 	}
-	pr_info("%s: connected, start RPC FLOW %lu bytes",
+	pr_info("%s: connected, put recv_multishot and start RPC FLOW %lu bytes",
 		ch->pa->addrstr, ch->pf->bytes);
+
+	put_recv_multishot(ch);
 
 	ch->state = CONNECTION_HANDLE_STATE_FLOWING;
 	ch->remain_bytes = ch->pf->bytes;
@@ -395,7 +401,6 @@ static void move_connection_handle_interval(struct connection_handle *ch)
 {
 	if (ch->pi == NULL) {
 		/* interval is not specified. no need to sleep */
-		ch->state = CONNCTION_HANDLE_STATE_DONE;
 		close_connection_handle(ch);
 		return;
 	}
@@ -414,6 +419,7 @@ static void move_connection_handle_interval(struct connection_handle *ch)
 	io_uring_prep_timeout(sqe, &intval, 0, 0);
 	io_uring_sqe_set_data(sqe, ch);
 }
+
 
 static void process_connection_handle_flowing(struct connection_handle *ch,
 					      struct io_uring_cqe *cqe)
@@ -439,8 +445,7 @@ static void process_connection_handle_flowing(struct connection_handle *ch,
 		/* ok, consume received bytes */
 		ch->remain_bytes -= cqe->res;
 		if (ch->remain_bytes > 0) {
-			/* more bytes to be received. put recv */
-			put_recv(ch);
+			/* more bytes to be received. */
 			return;
 		}
 
@@ -461,15 +466,16 @@ static void process_connection_handle_flowing(struct connection_handle *ch,
 		break;
 
 	case EVENT_TYPE_WRITE:
-		/* write "F [BYTES]" of RPC Request done. Put a read
-		 * for receiving bytes of the flow. */
+		/* write "F [BYTES]" of RPC Request done. Change the
+		 * event type to RECV to receive bytes of flow via
+		 * recv multishot */
 		if (cqe->res < 0) {
 			pr_warn("%s: write: %s", ch->pa->addrstr, strerror(-cqe->res));
 			close_connection_handle(ch);
 			return;
 		}
 		tsq_append(&ch->ts_flow_start);
-		put_recv(ch);
+		ch->event = EVENT_TYPE_RECV;
 		break;
 
 	default:
@@ -483,7 +489,7 @@ static void process_connection_handle_tcp_info(struct connection_handle *ch,
 					       struct io_uring_cqe *cqe)
 {
 	switch (ch->event) {
-	case EVENT_TYPE_READ:
+	case EVENT_TYPE_RECV:
 		pr_debug("%s: server tcp_info done", ch->pa->addrstr);
 		if (cqe->res <= 0) {
 			pr_warn("%s: read: %s", ch->pa->addrstr, strerror(cqe->res));
@@ -494,14 +500,15 @@ static void process_connection_handle_tcp_info(struct connection_handle *ch,
 		break;
 
 	case EVENT_TYPE_WRITE:
-		/* write "T" of RPC request done. Put a read for
-		 * receiving bytes of the tcp_info. */
+		/* write "T" of RPC request done. Change the event to RECV
+		 * to wait for receiving tcp_info string via recv multishot.
+		 */
 		if (cqe->res <= 0) {
 			pr_warn("%s: write: %s", ch->pa->addrstr, strerror(-cqe->res));
 			close_connection_handle(ch);
 			return;
 		}
-		put_read(ch, ch->tcp_info_s, TCP_INFO_STRLEN);
+		ch->event = EVENT_TYPE_RECV;
 		break;
 
 	default:
@@ -518,10 +525,7 @@ static void process_connection_handle_interval(struct connection_handle *ch,
 	if (ch->event != EVENT_TYPE_TIMEOUT) {
 		pr_err("invalid state/event pair: state=%d event=%d",
 		       ch->state, ch->event);
-		goto out;
 	}
-	ch->state = CONNCTION_HANDLE_STATE_DONE;
-out:
 	close_connection_handle(ch);
 }
 
@@ -541,6 +545,16 @@ static void client_process_cqe(struct io_uring_cqe *cqe)
 		break;
 	case CONNECTION_HANDLE_STATE_INTERVAL:
 		process_connection_handle_interval(ch, cqe);
+		break;
+	case CONNECTION_HANDLE_STATE_CLOSING:
+		process_connection_handle_closing(ch, cqe);
+		break;
+	case CONNECTION_HANDLE_STATE_DONE:
+		if (cqe->res == -ECANCELED) {
+			/* cancled recv_multishot puts a cqe with -ECANCELD. */
+			/* pass */
+		} else
+			pr_err("cqe happnes for finished connection: %d", cqe->res);
 		break;
 	default:
 		pr_err("invalid connection handle state: %d", ch->state);
