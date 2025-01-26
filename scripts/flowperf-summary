@@ -1,0 +1,118 @@
+#!/usr/bin/env python3
+
+import statistics as stat
+import argparse
+import sys
+import re
+
+
+class TcpInfo:
+    lost: int
+    sack: int
+    retramsmit: int
+    seg_out: int
+    seg_in: int
+    def __init__(self, line:str):
+        for tok in line.strip().split(','):
+            k, v = tok.split('=')
+            setattr(self, k, int(v))
+
+
+class Record:
+    """
+    A result of one RPC FLOW transaction
+    """
+    state: str
+    dst: str
+    flow_size: int
+    remain: int
+    start: int
+    end: int
+    time2conn: int
+    time2flow: int
+    tcp_info_c: TcpInfo
+    tcp_info_s: TcpInfo|None
+    finished: bool
+
+    def __init__(self, line:str):
+
+        key_v_is_int = ["flow_size", "remain", "start", "end",
+                        "time2conn", "time2flow"]
+        key_v_is_str = ["state", "dst"]
+        key_v_is_tcpinfo = ["tcp_c", "tcp_s"]
+
+        self.tcp_info_s = None
+
+        for tok in line.strip().split(' '):
+            if re.match(r"^tcp_.=$", tok):
+                # tcp_info is lacked due to uncomplete flowing
+                continue
+
+            key, v = tok.split('=', 1)
+
+            if key in key_v_is_int:
+                setattr(self, key, int(v))
+
+            elif key in key_v_is_str:
+                setattr(self, key, v)
+
+            elif key in key_v_is_tcpinfo:
+                setattr(self, key, TcpInfo(v))
+
+        self.finished = (self.state == 'd' and self.remain == 0)
+
+
+def parse_flowperf_output(out:str) -> list[Record]:
+    records = []
+    for line in map(lambda l: l.strip(), out.split("\n")):
+        if not line:
+            continue
+        r = Record(line)
+        records.append(r)
+    return records
+        
+
+def print_summary(records:list[Record]):
+    nr_flows = len(records)
+    nr_flows_finished = len(list(filter(lambda r: r.finished, records)))
+    print(f"Number of transactions: {nr_flows_finished}/{nr_flows} (success/total)")
+
+    flow_sizes = [ r.flow_size for r in records ]
+    print("Flow Size:              %.2f %d/%d (avg min/max) bytes" %
+          (stat.mean(flow_sizes), min(flow_sizes), max(flow_sizes)))
+
+    t2c = [ r.time2conn / 1000 for r in records if r.time2conn > 0]
+    print("Time to Connect:        %.2f %.2f/%.2f/%.2f (avg min/max/stdev) usec" %
+          (stat.mean(t2c), min(t2c), max(t2c), stat.pstdev(t2c)))
+    
+    t2f = [ r.time2flow / 1000 for r in records if r.time2flow > 0 ]
+    print("Flow Completion Time:   %.2f %.2f/%.2f/%.2f (avg min/max/stdev) usec" %
+          (stat.mean(t2f), min(t2f), max(t2f), stat.pstdev(t2f)))
+
+    fbps = [ r.flow_size * 8 / (r.time2flow / 1000000000) / 1000000
+             for r in records if r.time2flow > 0 and r.finished ]
+    print("Flow Throughput:        %.2f %.2f/%.2f/%.2f (avg min/max/stdev) Mbps" %
+          (stat.mean(fbps), min(fbps), max(fbps), stat.pstdev(fbps)))
+    
+    
+
+
+def main():
+
+    desc = "parse and print summary of flowperf client output"
+    parser = argparse.ArgumentParser(description=desc)
+
+    parser.add_argument("output", type = argparse.FileType("r"),
+                        nargs="?", default=sys.stdin,
+                        help = "path to flowperf client output file. default stdin.")
+    
+    args = parser.parse_args()
+
+    out = args.output.read()
+    records = parse_flowperf_output(out)
+
+    print_summary(records)
+
+
+if __name__ == "__main__":
+    main()
