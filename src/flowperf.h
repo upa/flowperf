@@ -114,7 +114,8 @@ inline static char connection_handle_state_name(int state)
 #define EVENT_TYPE_READ		2
 #define EVENT_TYPE_WRITE	3
 #define EVENT_TYPE_SEND_ZC	4
-#define EVENT_TYPE_TIMEOUT	5
+#define EVENT_TYPE_RECV		5
+#define EVENT_TYPE_TIMEOUT	6
 
 
 

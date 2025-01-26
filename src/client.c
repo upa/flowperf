@@ -18,6 +18,7 @@
 /* strcture representing flowperf client process */
 struct client {
 	struct opts *o;
+	struct iovec *registered;
 
 	/* easy list with connection_handle->next  */
 	struct connection_handle *first, *last;
@@ -26,6 +27,9 @@ struct client {
 	int nr_flows_done;
 
 	struct io_uring ring;
+
+	struct io_uring_buf_ring *recv_buf_ring;
+	void **recv_bufs;	/* nr_bufs x buf_sz region for io_uring_buf_ring */
 };
 
 static struct client cli;
@@ -162,7 +166,7 @@ static void tsq_bulk_get_time()
 }
 
 
-#define SEND_BUF_SZ	128
+#define MSG_BUF_SZ	256
 
 struct connection_handle {
 	/* a handle for a connection to a server */
@@ -179,10 +183,8 @@ struct connection_handle {
 	int 	event;
 
 	/* fileds for an RPC transaction */
-	char	sendbuf[SEND_BUF_SZ];
+	char	msg_buf[MSG_BUF_SZ];
 
-	void	*buf;
-	size_t	buf_sz;
 	ssize_t	remain_bytes;	/* remaining bytes to be received for flowing */
 
 	struct timespec ts_start;	/* tstamp of start time (put connect())*/
@@ -279,12 +281,6 @@ static int put_connect(void)
 	}
 	memset(ch, 0, sizeof(*ch));
 
-        if (posix_memalign(&ch->buf, 4096, cli.o->buf_sz) < 0) {
-                pr_err("posix_memalign: %s", strerror(errno));
-                free(ch);
-                return -1;
-        }
-        ch->buf_sz = cli.o->buf_sz;
 
 	ch->pa = prob_list_pickup_data_uniformly(cli.o->addrs);
 	ch->pf = prob_list_pickup_data_uniformly(cli.o->flows);
@@ -327,7 +323,17 @@ static void put_write(struct connection_handle *ch, size_t len)
 {
 	struct io_uring_sqe *sqe = io_uring_get_sqe_always(ring);
 	ch->event = EVENT_TYPE_WRITE;
-	io_uring_prep_write(sqe, ch->sock, ch->sendbuf, len, 0);
+	io_uring_prep_write(sqe, ch->sock, ch->msg_buf, len, 0);
+	io_uring_sqe_set_data(sqe, ch);
+}
+
+static void put_recv(struct connection_handle *ch)
+{
+	struct io_uring_sqe *sqe = io_uring_get_sqe_always(ring);
+	ch->event = EVENT_TYPE_RECV;
+	io_uring_prep_recv(sqe, ch->sock, NULL, 0, 0);
+	sqe->flags |= IOSQE_BUFFER_SELECT;
+	sqe->buf_group = 0;
 	io_uring_sqe_set_data(sqe, ch);
 }
 
@@ -336,7 +342,6 @@ static void close_connection_handle(struct connection_handle *ch)
 	pr_debug("%s: close connection handle", ch->pa->addrstr);
 	if (ch->sock > 1)
 		close(ch->sock);
-	free(ch->buf);
 
 	if (cli.o->nr_flows) {
 		/* number of flows to be done is specified */
@@ -381,8 +386,8 @@ static void process_connection_handle_connecting(struct connection_handle *ch,
 
 	ch->state = CONNECTION_HANDLE_STATE_FLOWING;
 	ch->remain_bytes = ch->pf->bytes;
-	snprintf(ch->sendbuf, SEND_BUF_SZ, RPC_REQ_START_FLOW " %lu", ch->pf->bytes);
-	put_write(ch, strlen(ch->sendbuf) + 1);
+	snprintf(ch->msg_buf, MSG_BUF_SZ, RPC_REQ_START_FLOW " %lu", ch->pf->bytes);
+	put_write(ch, strlen(ch->msg_buf) + 1);
 }
 
 
@@ -413,19 +418,29 @@ static void move_connection_handle_interval(struct connection_handle *ch)
 static void process_connection_handle_flowing(struct connection_handle *ch,
 					      struct io_uring_cqe *cqe)
 {
+	int buf_id;
+
 	switch (ch->event) {
-	case EVENT_TYPE_READ:
+	case EVENT_TYPE_RECV:
 		/* receiving flow */
 		if (cqe->res <= 0) {
-			pr_warn("%s: read: %s", ch->pa->addrstr, strerror(-cqe->res));
+			pr_warn("%s: recv: %s", ch->pa->addrstr, strerror(-cqe->res));
 			close_connection_handle(ch);
 			return;
 		}
 
+		/* put the recv buffer back to the ring */
+		buf_id = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
+		io_uring_buf_ring_add(cli.recv_buf_ring, cli.recv_bufs[buf_id],
+				      cli.o->buf_sz, buf_id,
+				      io_uring_buf_ring_mask(cli.o->nr_bufs), 0);
+		io_uring_buf_ring_advance(cli.recv_buf_ring, 1);
+
+		/* ok, consume received bytes */
 		ch->remain_bytes -= cqe->res;
 		if (ch->remain_bytes > 0) {
-			/* more bytes to be received. put read */
-			put_read(ch, ch->buf, ch->buf_sz);
+			/* more bytes to be received. put recv */
+			put_recv(ch);
 			return;
 		}
 
@@ -437,8 +452,8 @@ static void process_connection_handle_flowing(struct connection_handle *ch,
 		if (cli.o->server_tcp_info) {
 			/* get tcp_info from the server side */
 			ch->state = CONNECTION_HANDLE_STATE_TCP_INFO;
-			snprintf(ch->sendbuf, SEND_BUF_SZ, RPC_REQ_TCP_INFO);
-			put_write(ch, strlen(ch->sendbuf) + 1);
+			snprintf(ch->msg_buf, MSG_BUF_SZ, RPC_REQ_TCP_INFO);
+			put_write(ch, strlen(ch->msg_buf) + 1);
 			return;
 		}
 
@@ -454,7 +469,7 @@ static void process_connection_handle_flowing(struct connection_handle *ch,
 			return;
 		}
 		tsq_append(&ch->ts_flow_start);
-		put_read(ch, ch->buf, ch->buf_sz);
+		put_recv(ch);
 		break;
 
 	default:
@@ -590,13 +605,46 @@ static int client_loop(void)
 
 static int init_client_io_uring(void)
 {
-	int ret;
+	struct io_uring_buf_reg reg = {};
+	int i, ret;
 
 	ret = io_uring_queue_init(cli.o->queue_depth, ring, 0);
 	if (ret < 0) {
 		pr_err("io_uring_queue_init: %s", strerror(-ret));
 		return -1;
 	}
+
+	/* prepare provided buffer for recv_multishot */
+	if (posix_memalign((void **)&cli.recv_buf_ring, sysconf(_SC_PAGESIZE),
+			   cli.o->nr_bufs * sizeof(struct io_uring_buf_ring)) != 0) {
+		pr_err("posix_memalign: %s", strerror(errno));
+		return -1;
+	}
+	reg.ring_addr = (unsigned long)cli.recv_buf_ring;
+	reg.ring_entries = cli.o->nr_bufs;
+	reg.bgid = 0;
+	if ((ret = io_uring_register_buf_ring(ring, &reg, 0)) < 0) {
+		pr_err("io_uring_register_buf_ring: %s", strerror(-ret));
+		return -1;
+	}
+
+	/* add buffers to the buf_ring */
+	io_uring_buf_ring_init(cli.recv_buf_ring);
+	if ((cli.recv_bufs = calloc(cli.o->nr_bufs, sizeof(void *))) == NULL) {
+		pr_err("calloc: %s", strerror(errno));
+		return -1;
+	}
+	for (i = 0; i < cli.o->nr_bufs; i++) {
+		if ((cli.recv_bufs[i] = malloc(cli.o->buf_sz)) == NULL) {
+			pr_err("malloc: %s", strerror(errno));
+			return -1;
+		}
+		io_uring_buf_ring_add(cli.recv_buf_ring, cli.recv_bufs[i], cli.o->buf_sz,
+				      i, io_uring_buf_ring_mask(cli.o->nr_bufs), i);
+	}
+
+	io_uring_buf_ring_advance(cli.recv_buf_ring, cli.o->nr_bufs);
+
 	return 0;
 }
 
