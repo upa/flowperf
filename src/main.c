@@ -132,7 +132,7 @@ static int parse_args(int argc, char **argv, struct opts *o)
 			break;
 		case 't':
 			o->time = atoi(optarg);
-			if (o->time < 0) {
+			if (o->time < 1) {
 				pr_err("invalid time: %s", optarg);
 				return -1;
 			}

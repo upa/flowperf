@@ -587,7 +587,7 @@ static int client_loop(void)
 		return -1;
 	}
 
-	pr_notice("start the client loop");
+	pr_notice("client loop started");
 	while (is_running()) {
 
 		tsq_zerorize();
@@ -668,9 +668,15 @@ static int init_client_io_uring(void)
 	return 0;
 }
 
-static void sigint_handler(int signo) {
-    pr_notice("^C pressed. Shutting down.");
-    stop_running();
+static void signal_handler(int signo) {
+	switch (signo) {
+	case SIGINT:
+		pr_notice("^C pressed. shutting down.");
+		break;
+	case SIGALRM:
+		break;
+	}
+	stop_running();
 }
 
 int start_client(struct opts *o)
@@ -716,7 +722,14 @@ int start_client(struct opts *o)
 	start_running();
 
 	signal(SIGPIPE, SIG_IGN);
-	signal(SIGINT, sigint_handler);
+	signal(SIGINT, signal_handler);
+
+	if (cli.o->time > 0) {
+		pr_notice("set duration %d seconds", cli.o->time);
+		signal(SIGALRM, signal_handler);
+		alarm(cli.o->time);
+	}
+
 
 	ret = client_loop();
 

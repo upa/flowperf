@@ -422,7 +422,7 @@ static int server_loop(void)
 		return -1;
 	}
 
-	pr_notice("start the server loop");
+	pr_notice("server loop started");
 	while (is_running()) {
 		nr_cqes = io_uring_peek_batch_cqe(ring, cqes, serv.o->batch_sz);
 		if (nr_cqes == 0) {
