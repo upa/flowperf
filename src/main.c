@@ -7,7 +7,8 @@
 
 static void usage()
 {
-	printf("flowperf: performance measurement for flow completion times\n"
+	fprintf(stderr,
+		"flowperf: performance measurement for flow completion times\n"
 	       "\n"
 		"Usage: flowperf [-s|-c] [options]"
 	       "\n"

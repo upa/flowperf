@@ -77,9 +77,9 @@ def print_summary(records:list[Record]):
     nr_flows_finished = len(list(filter(lambda r: r.finished, records)))
     print(f"Number of transactions: {nr_flows_finished}/{nr_flows} (success/total)")
 
-    flow_sizes = [ r.flow_size for r in records ]
-    print("Flow Size:              %.2f %d/%d (avg min/max) bytes" %
-          (stat.mean(flow_sizes), min(flow_sizes), max(flow_sizes)))
+    fsizes = [ r.flow_size for r in records ]
+    print("Flow Size:              %.2f %d/%d/%.2f (avg min/max/stdev) bytes" %
+          (stat.mean(fsizes), min(fsizes), max(fsizes), stat.pstdev(fsizes)))
 
     t2c = [ r.time2conn / 1000 for r in records if r.time2conn > 0]
     print("Time to Connect:        %.2f %.2f/%.2f/%.2f (avg min/max/stdev) usec" %
@@ -95,8 +95,6 @@ def print_summary(records:list[Record]):
           (stat.mean(fbps), min(fbps), max(fbps), stat.pstdev(fbps)))
     
     
-
-
 def main():
 
     desc = "parse and print summary of flowperf client output"

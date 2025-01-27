@@ -22,7 +22,7 @@
 #define MIN_NR_BUFS		512		/* 256KB * 512 = 128MB */
 
 #define DEFAULT_BATCH_SZ	32
-#define MAX_BATCH_SZ		64
+#define MAX_BATCH_SZ		(DEFAULT_QUEUE_DEPTH >> 1)
 
 #define DEFAULT_LOCAL_ADDR	"::" /* in6-addr-any can handle both v6 and v4 */
 
