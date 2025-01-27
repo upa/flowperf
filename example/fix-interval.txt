@@ -1,3 +1,0 @@
-# Interval(nsec)	Probablity
-1000	1	# 1 usec
-
