@@ -14,3 +14,8 @@ target_compile_options(flowperf PRIVATE "-Wall")
 # copy scripts to build directory
 configure_file(${CMAKE_SOURCE_DIR}/scripts/flowperf-summary
 	${CMAKE_BINARY_DIR}/ COPYONLY)
+
+install(TARGETS flowperf
+	DESTINATION bin)
+install(FILES ${CMAKE_BINARY_DIR}/flowperf-summary
+	DESTINATION bin)
