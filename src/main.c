@@ -1,4 +1,6 @@
 
+#include <time.h>
+
 #include <client.h>
 #include <server.h>
 #include <options.h>
@@ -9,45 +11,46 @@ static void usage()
 {
 	fprintf(stderr,
 		"flowperf: performance measurement for flow completion times\n"
-	       "\n"
+		"\n"
 		"Usage: flowperf [-s|-c] [options]"
-	       "\n"
-	       "    -s              server mode\n"
-	       "    -c              client mode\n"
-	       "\n"
-	       "  Common options\n"
-	       "    -p PORT         port number\n"
-	       "    -q QUEUE_DEPTH  io_uring queue depth\n"
-	       "    -B BUF_SIZE     size of a buffer region (default %dKB)\n"
-	       "\n"
-	       "    -b BATCH_SIZE   batch size for processing io_uring\n"
-	       "    -v              increment verbose output level\n"
-	       "    -h              print this help\n"
-	       "\n"
-	       "  Server mode options\n"
-	       "    -a ADDRESS        local address to bind\n"
-	       "    -z                use tx zero copy\n"
-	       "\n"
-	       "  Client mode options\n"
-	       "    -n NUMBER       number of flows to be done on the benchmark\n"
-	       "    -t TIME         time (sec) of the benchmark, default 10 sec\n"
-	       "    -x CONCURRENCY  number of cunccurent flows\n"
-	       "    -N NR_BUFS      number of buffer regions for recv (default %d):\n"
-	       "                    BUF_SIZE x NR_BUFS memory regions are registered\n"
-	       "                    to io_uring via io_uring_register_buf_ring()\n"
-	       "    -T              get tcp_info from the server side for each RPC\n"
-	       "\n"
-	       "    -d ADDR:PROB    dest address and its probability\n"
-	       "    -D ADDR_TXT     txt file contains 'ADDR PROBABLITY' per line\n"
-	       "\n"
-	       "    -f FLOW_SZ:PROB flow size (byte) and its probablity\n"
-	       "    -F FLOW_TXT     txt file contains 'FLOWSIZE PROBABILITY' per line\n"
-	       "\n"
-	       "    -i INTVAL:PROB  interval (nsec) and its probablity\n"
-	       "    -I INTVAL_TXT   txt file contains 'INTERVAL PROBABLITY' per line\n"
-	       "\n\n",
-	       MIN_BUF_SZ / 1024,
-	       MIN_NR_BUFS);
+		"\n"
+		"    -s              server mode\n"
+		"    -c              client mode\n"
+		"\n"
+		"  Common options\n"
+		"    -p PORT         port number\n"
+		"    -B BUF_SIZE     size of a buffer region (default %dKB)\n"
+		"\n"
+		"    -q QUEUE_DEPTH  io_uring queue depth\n"
+		"    -b BATCH_SIZE   batch size for processing io_uring\n"
+		"    -v              increment verbose output level\n"
+		"    -h              print this help\n"
+		"\n"
+		"  Server mode options\n"
+		"    -a ADDRESS        local address to bind\n"
+		"    -z                use tx zero copy\n"
+		"\n"
+		"  Client mode options\n"
+		"    -n NUMBER       number of flows to be done on the benchmark\n"
+		"    -t TIME         time (sec) of the benchmark, default 10 sec\n"
+		"    -x CONCURRENCY  number of cunccurent flows\n"
+		"    -N NR_BUFS      number of buffer regions for recv (default %d):\n"
+		"                    BUF_SIZE x NR_BUFS memory regions are registered\n"
+		"                    to io_uring via io_uring_register_buf_ring()\n"
+		"    -T              get tcp_info from the server side for each RPC\n"
+		"    -R RANDOM_SEED  set random seed\n"
+		"\n"
+		"    -d ADDR:PROB    dest address and its probability\n"
+		"    -D ADDR_TXT     txt file contains 'ADDR PROBABLITY' per line\n"
+		"\n"
+		"    -f FLOW_SZ:PROB flow size (byte) and its probablity\n"
+		"    -F FLOW_TXT     txt file contains 'FLOWSIZE PROBABILITY' per line\n"
+		"\n"
+		"    -i INTVAL:PROB  interval (nsec) and its probablity\n"
+		"    -I INTVAL_TXT   txt file contains 'INTERVAL PROBABLITY' per line\n"
+		"\n\n",
+		MIN_BUF_SZ / 1024,
+		MIN_NR_BUFS);
 }
 
 
@@ -68,6 +71,7 @@ static int parse_args(int argc, char **argv, struct opts *o)
 
 	/* server options */
 	o->local_addr = _default_local_addr;
+	o->random_seed = time(NULL);
 
 	/* client options */
 	o->nr_flows = 0;
@@ -80,9 +84,9 @@ static int parse_args(int argc, char **argv, struct opts *o)
 	if ((o->intervals = prob_list_alloc()) == NULL)
 		return -1;
 
-#define OPTSTR_COMMON "scp:q:B:b:vh"
+#define OPTSTR_COMMON "scp:B:q:b:vh"
 #define OPTSTR_SERVER "a:z"
-#define OPTSTR_CLIENT "n:t:x:N:Td:D:f:F:i:I:"
+#define OPTSTR_CLIENT "n:t:x:N:TR:d:D:f:F:i:I:"
 #define OPTSTR OPTSTR_COMMON OPTSTR_SERVER OPTSTR_CLIENT
 
 	while ((ch = getopt(argc, argv, OPTSTR)) != -1) {
@@ -96,15 +100,15 @@ static int parse_args(int argc, char **argv, struct opts *o)
 		case 'p':
 			o->port = optarg;
 			break;
-		case 'q':
-			o->queue_depth = atoi(optarg);
-			break;
 		case 'B':
 			o->buf_sz = atoi(optarg);
 			if (o->buf_sz < MIN_BUF_SZ) {
 				pr_err("invalid buf_sz %s (must be ge %d)",
 				       optarg, MIN_BUF_SZ);
 			}
+			break;
+		case 'q':
+			o->queue_depth = atoi(optarg);
 			break;
 		case 'b':
 			o->batch_sz = atoi(optarg);
@@ -154,10 +158,18 @@ static int parse_args(int argc, char **argv, struct opts *o)
 			if (o->nr_bufs < MIN_NR_BUFS) {
 				pr_err("invalid nr_bufs %s (must be ge %d)",
 				       optarg, MIN_NR_BUFS);
+				return -1;
 			}
 			break;
 		case 'T':
 			o->server_tcp_info = true;
+			break;
+		case 'R':
+			o->random_seed = atol(optarg);
+			if (o->random_seed < 0) {
+				pr_err("invalid random seed %s", optarg);
+				return -1;
+			}
 			break;
 
 		case 'd':
@@ -210,6 +222,8 @@ static int parse_args(int argc, char **argv, struct opts *o)
 			return -1;
 		}
 	}
+
+	srand(o->random_seed);
 
 	/* validate */
 	if (o->queue_depth < o->batch_sz) {

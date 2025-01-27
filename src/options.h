@@ -32,15 +32,17 @@ struct opts {
 	int	mode;
 
 	char	*port;
-	int	queue_depth;
-	int 	severity;
 	int	buf_sz;		/* a buffer size to be registered to io_uring */
-	int	nr_bufs;	/* number of buffers to be registered to io_uring */
+
+	int	queue_depth;
 	int 	batch_sz;
+
+	int 	severity;
 
 
 	/* server options */
 	char	*local_addr;
+	int	nr_bufs;	/* number of buffers to be registered to io_uring */
 	bool	send_zero_copy;
 
 	/* client options */
@@ -48,6 +50,7 @@ struct opts {
 	int 	time;
 	int 	concurrency;
 	bool	server_tcp_info;	/* get tcp_info from the server side */
+	unsigned int     random_seed;
 
 	prob_list_t *addrs;
 	prob_list_t *flows;
