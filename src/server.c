@@ -231,8 +231,8 @@ static void process_client_handle_accepting(struct client_handle *ch_accept,
 	memset(ch->send_buf, '!', serv.o->buf_sz);
 	ch->sock = cqe->res;
 	ch->addrlen = sizeof(ch->addr);
-	if (getsockname(ch->sock, (struct sockaddr *)&ch->addr, &ch->addrlen) < 0) {
-		pr_err("getsockname: %s", strerror(errno));
+	if (getpeername(ch->sock, (struct sockaddr *)&ch->addr, &ch->addrlen) < 0) {
+		pr_err("getpeername: %s", strerror(errno));
 		return;
 	}
 	sockaddr_ntop(&ch->addr, ch->addrstr, ADDRSTRLEN);
