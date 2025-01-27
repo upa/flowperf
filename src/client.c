@@ -211,7 +211,7 @@ static void connection_handle_append(struct connection_handle *ch)
 	}
 }
 
-static time_t timespec_sub_nsec(struct timespec *after, struct timespec *before)
+static long long timespec_sub_nsec(struct timespec *after, struct timespec *before)
 {
 	time_t a_nsec = (after->tv_sec * 1000000000 + after->tv_nsec);
 	time_t b_nsec = (before->tv_sec * 1000000000 + before->tv_nsec);
@@ -219,7 +219,7 @@ static time_t timespec_sub_nsec(struct timespec *after, struct timespec *before)
 	if (a_nsec == 0 || b_nsec == 0)
 		return 0;
 
-	return a_nsec - b_nsec;
+	return (long long)a_nsec - (long long)b_nsec;
 }
 
 #define timespec_nsec(ts) ((ts)->tv_sec * 1000000000 + (ts)->tv_nsec)
@@ -236,8 +236,8 @@ void print_connection_handle_result(FILE *fp, struct connection_handle *ch)
 		       "remain=%lu "
 		       "start=%lu "
 		       "end=%lu "
-		       "time2conn=%lu "
-		       "time2flow=%lu "
+		       "time2conn=%lld "
+		       "time2flow=%lld "
 		       "tcp_c=%s",
 		       connection_handle_state_name(ch->state),
 		       ch->pa->addrstr,
