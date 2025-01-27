@@ -114,23 +114,28 @@ int prob_list_iterate(prob_list_t *list, int (*iter)(prob_t *))
 
 prob_t *prob_list_pickup(prob_list_t *list, double needle)
 {
-	int i = round(list->size / 2);
+	int i, win = round(list->size / 2);
 	prob_t *prob;
 
 	assert(list->size > 0);
 
-	while (1) {
-		/* bidirectional search */
+	/* bidirectional search */
+	for (i = win;;) {
 		prob = &list->probs[i];
+
 		if (prob->probability >= needle &&
 		    (i == 0 || needle > list->probs[i-1].probability)) {
 			return prob;
 		}
 
+		win = ceil(win / 2);
+		if (win == 0)
+			win = 1;
+
 		if (prob->probability > needle)
-			i += round((list->size - i) / 2);
+			i -= win;
 		else
-			i -= round(i / 2);
+			i += win;
 	}
 
 	/* not reached */
