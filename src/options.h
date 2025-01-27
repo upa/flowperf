@@ -26,6 +26,7 @@
 
 #define DEFAULT_LOCAL_ADDR	"::" /* in6-addr-any can handle both v6 and v4 */
 
+
 /* flowperf command line options */
 struct opts {
 	/* common options for both server and client modes */
@@ -47,7 +48,7 @@ struct opts {
 
 	/* client options */
 	int     nr_flows;
-	int 	time;
+	int 	duration;
 	int 	concurrency;
 	bool	server_tcp_info;	/* get tcp_info from the server side */
 	unsigned int     random_seed;

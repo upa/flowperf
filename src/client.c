@@ -740,10 +740,14 @@ int start_client(struct opts *o)
 	signal(SIGPIPE, SIG_IGN);
 	signal(SIGINT, signal_handler);
 
-	if (cli.o->time > 0) {
-		pr_notice("set duration %d seconds", cli.o->time);
+	pr_notice("test duration: %d%s",
+		  cli.o->duration, cli.o->duration == 0 ? " (infinite)" : "");
+	pr_notice("number of flows to be done: %d%s",
+		  cli.o->nr_flows, cli.o->nr_flows == 0 ? " (infinite)" : "");
+
+	if (cli.o->duration > 0) {
 		signal(SIGALRM, signal_handler);
-		alarm(cli.o->time);
+		alarm(cli.o->duration);
 	}
 
 

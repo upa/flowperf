@@ -31,8 +31,8 @@ static void usage()
 		"    -z                use tx zero copy\n"
 		"\n"
 		"  Client mode options\n"
-		"    -n NUMBER       number of flows to be done on the benchmark\n"
-		"    -t TIME         time (sec) of the benchmark, default 10 sec\n"
+		"    -n NUMBER       number of flows to be done, default 0 (inifinit)\n"
+		"    -t DURATION     test duration (sec), default 10, 0 means inifnite\n"
 		"    -x CONCURRENCY  number of cunccurent flows\n"
 		"    -N NR_BUFS      number of buffer regions for recv (default %d):\n"
 		"                    BUF_SIZE x NR_BUFS memory regions are registered\n"
@@ -74,8 +74,9 @@ static int parse_args(int argc, char **argv, struct opts *o)
 	o->random_seed = time(NULL);
 
 	/* client options */
-	o->nr_flows = 0;
-	o->time = 10;
+	o->nr_flows = -1;
+	o->duration = -1;
+
 	o->concurrency = 1;
 	if ((o->addrs = prob_list_alloc()) == NULL)
 		return -1;
@@ -140,9 +141,9 @@ static int parse_args(int argc, char **argv, struct opts *o)
 			}
 			break;
 		case 't':
-			o->time = atoi(optarg);
-			if (o->time < 1) {
-				pr_err("invalid time: %s", optarg);
+			o->duration = atoi(optarg);
+			if (o->duration < 0) {
+				pr_err("invalid duration: %s", optarg);
 				return -1;
 			}
 			break;
@@ -224,6 +225,15 @@ static int parse_args(int argc, char **argv, struct opts *o)
 	}
 
 	srand(o->random_seed);
+
+	if (o->nr_flows < 0 && o->duration < 0)
+		o->duration = 10;
+
+	if (o->nr_flows < 0)
+		o->nr_flows = 0;
+
+	if (o->duration < 0)
+		o->duration = 0;
 
 	/* validate */
 	if (o->queue_depth < o->batch_sz) {
