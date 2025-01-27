@@ -16,4 +16,4 @@ original message size distributions can be found
 ./cdf2pdf.py ${SizeDistDir}/DCTCP_MsgSizeDist.txt --size-factor 1460 > dctcp.txt
 ```
 
-`--size-factor` for DCTCP refrects [lies of code](https://github.com/PlatformLab/HomaSimulation/blob/omnet_simulations/RpcTransportDesign/OMNeT%2B%2BSimulation/homatransport/sizeDistributions/adjustLoadFac.py#L95-L102).
+`--size-factor` for DCTCP reflects [lines of code](https://github.com/PlatformLab/HomaSimulation/blob/omnet_simulations/RpcTransportDesign/OMNeT%2B%2BSimulation/homatransport/sizeDistributions/adjustLoadFac.py#L95-L102).

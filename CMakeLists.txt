@@ -17,5 +17,9 @@ configure_file(${CMAKE_SOURCE_DIR}/scripts/flowperf-summary
 
 install(TARGETS flowperf
 	DESTINATION bin)
+
 install(PROGRAMS ${CMAKE_BINARY_DIR}/flowperf-summary
 	DESTINATION bin)
+
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/examples
+	DESTINATION share/flowperf)
