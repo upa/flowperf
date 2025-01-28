@@ -82,7 +82,7 @@ int build_tcp_info_string(int sock, char *buf, size_t size)
 			"segi=%u",	/* tcpi_segs_in 	*/
 			info.tcpi_lost,
 			info.tcpi_sacked,
-			info.tcpi_retransmits,
+			info.tcpi_total_retrans,
 			info.tcpi_segs_out,
 			info.tcpi_segs_in
 		);
