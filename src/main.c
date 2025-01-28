@@ -50,8 +50,8 @@ static void usage()
 		"    -i INTVAL:PROB  interval (nsec) and its probablity\n"
 		"    -I INTVAL_TXT   txt file contains 'INTERVAL PROBABLITY' per line\n"
 		"\n\n",
-		MIN_BUF_SZ / 1024,
-		MIN_NR_BUFS);
+		DEFAULT_BUF_SZ / 1024,
+		DEFAULT_NR_BUFS);
 }
 
 
@@ -65,8 +65,8 @@ static int parse_args(int argc, char **argv, struct opts *o)
 	memset(o, 0, sizeof(*o));
 	o->port = DEFAULT_PORT;
 	o->queue_depth = DEFAULT_QUEUE_DEPTH;
-	o->buf_sz = MIN_BUF_SZ;
-	o->nr_bufs = MIN_NR_BUFS;
+	o->buf_sz = DEFAULT_BUF_SZ;
+	o->nr_bufs = DEFAULT_NR_BUFS;
 	o->batch_sz = DEFAULT_BATCH_SZ;
 	o->severity = SEVERITY_WARN;
 
@@ -104,9 +104,9 @@ static int parse_args(int argc, char **argv, struct opts *o)
 			break;
 		case 'B':
 			o->buf_sz = atoi(optarg);
-			if (o->buf_sz < MIN_BUF_SZ) {
-				pr_err("invalid buf_sz %s (must be ge %d)",
-				       optarg, MIN_BUF_SZ);
+			if (o->buf_sz < 1) {
+				pr_err("invalid buf_sz %s", optarg);
+				return -1;
 			}
 			break;
 		case 'q':
@@ -132,9 +132,8 @@ static int parse_args(int argc, char **argv, struct opts *o)
 			break;
 		case 'N':
 			o->nr_bufs = atoi(optarg);
-			if (o->nr_bufs < MIN_NR_BUFS) {
-				pr_err("invalid nr_bufs %s (must be ge %d)",
-				       optarg, MIN_NR_BUFS);
+			if (o->nr_bufs < 1) {
+				pr_err("invalid nr_bufs %s", optarg);
 				return -1;
 			}
 			break;

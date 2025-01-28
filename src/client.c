@@ -347,7 +347,6 @@ static void put_write_flowing(struct connection_handle *ch)
 			ch->send_buf[send_sz - 1] = RPC_TAIL_MARK_END;
 	}
 
-	ch->remain_bytes -= send_sz;
 	put_write(ch, ch->send_buf, send_sz);
 }
 
@@ -444,7 +443,9 @@ static void process_connection_handle_flowing(struct connection_handle *ch,
 		return;
 	}
 
-	if (ch->remain_bytes == 0) {
+	ch->remain_bytes -= cqe->res;
+
+	if (ch->remain_bytes <= 0) {
 		/* All bytes sent. save the tcp_info and Let's get ack
 		 * or tcp_info as ack from the server */
 		build_tcp_info_string(ch->sock, ch->tcp_info_c, TCP_INFO_STRLEN);

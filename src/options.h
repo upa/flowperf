@@ -18,8 +18,8 @@
 #define DEFAULT_PORT		"9999"
 #define DEFAULT_QUEUE_DEPTH	512
 
-#define MIN_BUF_SZ		(1 << 18)	/* 256KB */
-#define MIN_NR_BUFS		1024		/* 256KB * 512 = 256MB */
+#define DEFAULT_BUF_SZ		(1 << 18)	/* 256KB */
+#define DEFAULT_NR_BUFS		1024		/* 256KB * 512 = 256MB */
 
 #define DEFAULT_BATCH_SZ	32
 #define MAX_BATCH_SZ		(DEFAULT_QUEUE_DEPTH >> 1)
