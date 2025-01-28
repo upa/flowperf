@@ -27,9 +27,6 @@ struct client {
 	int nr_flows_done;
 
 	struct io_uring ring;
-
-	struct io_uring_buf_ring *recv_buf_ring;
-	void **recv_bufs;	/* nr_bufs x buf_sz region for io_uring_buf_ring */
 };
 
 static struct client cli;
@@ -166,7 +163,7 @@ static void tsq_bulk_get_time()
 }
 
 
-#define MSG_BUF_SZ	256
+#define MSG_BUF_SZ	32
 
 struct connection_handle {
 	/* a handle for a connection to a server */
@@ -183,7 +180,8 @@ struct connection_handle {
 	int 	event;
 
 	/* fileds for an RPC transaction */
-	char	msg_buf[MSG_BUF_SZ];
+	char msg_buf[MSG_BUF_SZ];
+	char *send_buf;
 
 	ssize_t	remain_bytes;	/* remaining bytes to be received for flowing */
 
@@ -194,6 +192,8 @@ struct connection_handle {
 	/* tcp_info */
 	char tcp_info_s[TCP_INFO_STRLEN];
 	char tcp_info_c[TCP_INFO_STRLEN];
+
+
 };
 
 
@@ -289,6 +289,11 @@ static int put_connect(void)
 	}
 	memset(ch, 0, sizeof(*ch));
 
+	if ((ch->send_buf = malloc(cli.o->buf_sz)) == NULL) {
+		pr_err("malloc: %s", strerror(errno));
+		return -1;
+	}
+	memset(ch->send_buf, '!', cli.o->buf_sz);
 
 	ch->pa = prob_list_pickup_data_uniformly(cli.o->addrs);
 	ch->pf = prob_list_pickup_data_uniformly(cli.o->flows);
@@ -318,43 +323,62 @@ static int put_connect(void)
 	return 0;
 }
 
-static void put_write(struct connection_handle *ch, size_t len)
+static void put_write(struct connection_handle *ch, char *buf, size_t len)
 {
 	struct io_uring_sqe *sqe = io_uring_get_sqe_always(ring);
 	ch->event = EVENT_TYPE_WRITE;
-	io_uring_prep_write(sqe, ch->sock, ch->msg_buf, len, 0);
+	io_uring_prep_write(sqe, ch->sock, buf, len, 0);
 	io_uring_sqe_set_data(sqe, ch);
 }
 
-static void put_recv_multishot(struct connection_handle *ch)
+static void put_write_flowing(struct connection_handle *ch)
+{
+	size_t send_sz = min(ch->remain_bytes, cli.o->buf_sz);
+
+	ch->send_buf[send_sz - 1] = '!'; /* this byte may be 'E' for last flowing */
+	if (send_sz == ch->remain_bytes) {
+		/* this is the last segment, put T or E */
+		if (cli.o->server_tcp_info)
+			ch->send_buf[send_sz - 1] = RPC_TAIL_MARK_TCP_INFO;
+		else	
+			ch->send_buf[send_sz - 1] = RPC_TAIL_MARK_END;
+	}
+
+	ch->remain_bytes -= send_sz;
+	put_write(ch, ch->send_buf, send_sz);
+}
+
+static void put_read(struct connection_handle *ch, char *buf, size_t len)
 {
 	struct io_uring_sqe *sqe = io_uring_get_sqe_always(ring);
-	ch->event = EVENT_TYPE_RECV;
-	io_uring_prep_recv_multishot(sqe, ch->sock, NULL, 0, 0);
-	sqe->flags |= IOSQE_BUFFER_SELECT;
-	sqe->buf_group = 0;
+	ch->event = EVENT_TYPE_READ;
+	io_uring_prep_read(sqe, ch->sock, buf, len, 0);
+	io_uring_sqe_set_data(sqe, ch);
+}
+
+static void put_timeout(struct connection_handle *ch)
+{
+	struct io_uring_sqe *sqe = io_uring_get_sqe_always(ring);
+	struct __kernel_timespec intval;
+
+	pr_debug("%s: sleep %lu nsec", ch->pa->addrstr, ch->pi->interval);
+
+	intval.tv_sec = 0;
+	intval.tv_nsec = ch->pi->interval;
+
+	ch->state = CONNECTION_HANDLE_STATE_INTERVAL;
+	ch->event = EVENT_TYPE_TIMEOUT;
+	io_uring_prep_timeout(sqe, &intval, 0, 0);
 	io_uring_sqe_set_data(sqe, ch);
 }
 
 static void close_connection_handle(struct connection_handle *ch)
 {
-	struct io_uring_sqe *sqe = io_uring_get_sqe_always(ring);
-
-	/* we need to issue io_uring cancel to stop recv_multishot */
-	pr_debug("%s: cancel recv multishot for fd=%d", ch->pa->addrstr, ch->sock);
-	ch->event = EVENT_TYPE_CANCEL;
-	ch->state = CONNECTION_HANDLE_STATE_CLOSING;
-	io_uring_prep_cancel_fd(sqe, ch->sock, 0);
-	io_uring_sqe_set_data(sqe, ch);
-}
-
-static void process_connection_handle_closing(struct connection_handle *ch,
-					      struct io_uring_cqe *cqe)
-{
 	pr_debug("%s: close connection", ch->pa->addrstr);
 
-	ch->state = CONNECTION_HANDLE_STATE_DONE;
 	close(ch->sock);
+	free(ch->send_buf);
+	ch->send_buf = NULL;
 
 	if (cli.o->nr_flows) {
 		/* number of flows to be done is specified */
@@ -367,9 +391,9 @@ static void process_connection_handle_closing(struct connection_handle *ch,
 	}
 
 	/* On the client side, always call close_connection_handle()
-	 * and process_connection_handle_closing() is called. When a
-	 * connection finished regardless of the RPC completed or
-	 * failed. Then, put a new connect() to start the next RPC.
+	 *  When a connection finished regardless of the RPC completed
+	 *  or failed. Then, put a new connect() to start the next
+	 *  RPC.
 	 */
 	put_connect();
 }
@@ -384,161 +408,94 @@ static void process_connection_handle_connecting(struct connection_handle *ch,
 		return;
 	}
 
-	/* handle is CONNECTION, and connect() completed. Put the
-	 * Write event to send RPC REQUEST START FLOW and set the
-	 * state FLOWING.
+	/* handle is CONNECTION, and connect() completed. Start Flowing
 	 */
 	if (cqe->res != 0) {
 		pr_warn("%s: connect: %s", ch->pa->addrstr, strerror(-cqe->res));
 		close_connection_handle(ch);
 		return;
 	}
-	pr_info("%s: connected, put recv_multishot and start RPC FLOW %lu bytes",
-		ch->pa->addrstr, ch->pf->bytes);
 
-	put_recv_multishot(ch);
+	pr_debug("%s: start flowing %lu bytes", ch->pa->addrstr, ch->remain_bytes);
+	tsq_append(&ch->ts_flow_start);
 
 	ch->state = CONNECTION_HANDLE_STATE_FLOWING;
 	ch->remain_bytes = ch->pf->bytes;
-	snprintf(ch->msg_buf, MSG_BUF_SZ, RPC_REQ_START_FLOW " %lu", ch->pf->bytes);
-	put_write(ch, strlen(ch->msg_buf) + 1);
-}
-
-
-static void move_connection_handle_interval(struct connection_handle *ch)
-{
-	if (ch->pi == NULL) {
-		/* interval is not specified. no need to sleep */
-		close_connection_handle(ch);
-		return;
-	}
-
-	struct io_uring_sqe *sqe = io_uring_get_sqe_always(ring);
-	struct __kernel_timespec intval;
-
-	pr_debug("%s: sleep for interval %lu nsec", ch->pa->addrstr, ch->pi->interval);
-
-	intval.tv_sec = 0;
-	intval.tv_nsec = ch->pi->interval;
-
-	ch->state = CONNECTION_HANDLE_STATE_INTERVAL;
-	ch->event = EVENT_TYPE_TIMEOUT;
-
-	io_uring_prep_timeout(sqe, &intval, 0, 0);
-	io_uring_sqe_set_data(sqe, ch);
+	put_write_flowing(ch);
 }
 
 
 static void process_connection_handle_flowing(struct connection_handle *ch,
 					      struct io_uring_cqe *cqe)
 {
-	int buf_id;
-
-	switch (ch->event) {
-	case EVENT_TYPE_RECV:
-		/* receiving flow */
-		/* put the recv buffer back to the ring */
-		buf_id = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
-		io_uring_buf_ring_add(cli.recv_buf_ring, cli.recv_bufs[buf_id],
-				      cli.o->buf_sz, buf_id,
-				      io_uring_buf_ring_mask(cli.o->nr_bufs), 0);
-		io_uring_buf_ring_advance(cli.recv_buf_ring, 1);
-
-		/* check recv failed or not */
-		if (cqe->res <= 0) {
-			pr_warn("%s: recv: %s", ch->pa->addrstr, strerror(-cqe->res));
-			close_connection_handle(ch);
-			return;
-		}
-
-		/* ok, consume received bytes */
-		ch->remain_bytes -= cqe->res;
-		if (ch->remain_bytes > 0) {
-			/* more bytes to be received. */
-			return;
-		}
-
-		/* all bytes transfered. Next is to save tcp_info */
-		pr_debug("%s: flow %lu bytes done", ch->pa->addrstr, ch->pf->bytes);
-		clock_gettime(CLOCK_MONOTONIC, &ch->ts_flow_end);
-
-		build_tcp_info_string(ch->sock, ch->tcp_info_c, TCP_INFO_STRLEN);
-		if (cli.o->server_tcp_info) {
-			/* get tcp_info from the server side */
-			ch->state = CONNECTION_HANDLE_STATE_TCP_INFO;
-			snprintf(ch->msg_buf, MSG_BUF_SZ, RPC_REQ_TCP_INFO);
-			put_write(ch, strlen(ch->msg_buf) + 1);
-			return;
-		}
-
-		move_connection_handle_interval(ch);
-		break;
-
-	case EVENT_TYPE_WRITE:
-		/* write "F [BYTES]" of RPC Request done. Change the
-		 * event type to RECV to receive bytes of flow via
-		 * recv multishot */
-		if (cqe->res < 0) {
-			pr_warn("%s: write: %s", ch->pa->addrstr, strerror(-cqe->res));
-			close_connection_handle(ch);
-			return;
-		}
-		tsq_append(&ch->ts_flow_start);
-		ch->event = EVENT_TYPE_RECV;
-		break;
-
-	default:
+	if (ch->event != EVENT_TYPE_WRITE) {
 		pr_err("invalid state/event pair: state=%d event=%d",
 		       ch->state, ch->event);
 		close_connection_handle(ch);
+		return;
 	}
+
+	if (cqe->res <= 0) {
+		pr_warn("%s: write: %s", ch->pa->addrstr, strerror(-cqe->res));
+		close_connection_handle(ch);
+		return;
+	}
+
+	if (ch->remain_bytes == 0) {
+		/* All bytes sent. save the tcp_info and Let's get ack
+		 * or tcp_info as ack from the server */
+		build_tcp_info_string(ch->sock, ch->tcp_info_c, TCP_INFO_STRLEN);
+		ch->state = CONNECTION_HANDLE_STATE_WAIT_ACK;
+		if (cli.o->server_tcp_info) {
+			memset(ch->tcp_info_s, 0, TCP_INFO_STRLEN);
+			put_read(ch, ch->tcp_info_s, TCP_INFO_STRLEN);
+		} else {
+			memset(ch->msg_buf, 0, MSG_BUF_SZ);
+			put_read(ch, ch->msg_buf, MSG_BUF_SZ);
+		}
+		return;
+	}
+
+	/* we need to send more bytes */
+	put_write_flowing(ch);
 }
 
-static void process_connection_handle_tcp_info(struct connection_handle *ch,
+static void process_connection_handle_wait_ack(struct connection_handle *ch,
 					       struct io_uring_cqe *cqe)
 {
-	switch (ch->event) {
-	case EVENT_TYPE_RECV:
-		pr_debug("%s: server tcp_info done", ch->pa->addrstr);
-
-		/* copy recv buf to tcp_info_s */
-		int buf_id = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
-		if (cqe->res > 0)
-			strncpy(ch->tcp_info_s, cli.recv_bufs[buf_id], cqe->res);
-
-		/* put the recv buffer back to the ring */
-		io_uring_buf_ring_add(cli.recv_buf_ring, cli.recv_bufs[buf_id],
-				      cli.o->buf_sz, buf_id,
-				      io_uring_buf_ring_mask(cli.o->nr_bufs), 0);
-		io_uring_buf_ring_advance(cli.recv_buf_ring, 1);
-
-		if (cqe->res <= 0) {
-			pr_warn("%s: recv: %s", ch->pa->addrstr, strerror(cqe->res));
-			close_connection_handle(ch);
-			return;
-		}
-
-		move_connection_handle_interval(ch);
-		break;
-
-	case EVENT_TYPE_WRITE:
-		/* write "T" of RPC request done. Change the event to RECV
-		 * to wait for receiving tcp_info string via recv multishot.
-		 */
-		if (cqe->res <= 0) {
-			pr_warn("%s: write: %s", ch->pa->addrstr, strerror(-cqe->res));
-			close_connection_handle(ch);
-			return;
-		}
-		ch->event = EVENT_TYPE_RECV;
-		break;
-
-	default:
+	if (ch->event != EVENT_TYPE_READ) {
 		pr_err("invalid state/event pair: state=%d event=%d",
 		       ch->state, ch->event);
-		close_connection_handle(ch);
+		goto close;
 	}
 
+	if (cqe->res <= 0) {
+		if (cqe->res < 0)
+			pr_warn("%s: read: %s", ch->pa->addrstr, strerror(-cqe->res));
+		else
+			pr_warn("%s: connection closed", ch->pa->addrstr);
+		goto close;
+	}
+
+	if (!cli.o->server_tcp_info && ch->msg_buf[0] != RPC_TAIL_MARK_ACK) {
+		pr_err("%s: unexpected tail mark for ack: %c",
+		       ch->pa->addrstr, ch->msg_buf[0]);
+		goto close;
+	}
+
+	pr_debug("%s: %lu bytes flow acked", ch->pa->addrstr, ch->pf->bytes);
+	tsq_append(&ch->ts_flow_end);
+
+	if (ch->pi) {
+		/* sleep interval */
+		put_timeout(ch);
+		return;
+	}
+
+	/* nothing to do. close! */
+	ch->state = CONNECTION_HANDLE_STATE_DONE;
+close:
+	close_connection_handle(ch);
 }
 
 static void process_connection_handle_interval(struct connection_handle *ch,
@@ -562,21 +519,11 @@ static void client_process_cqe(struct io_uring_cqe *cqe)
 	case CONNECTION_HANDLE_STATE_FLOWING:
 		process_connection_handle_flowing(ch, cqe);
 		break;
-	case CONNECTION_HANDLE_STATE_TCP_INFO:
-		process_connection_handle_tcp_info(ch, cqe);
+	case CONNECTION_HANDLE_STATE_WAIT_ACK:
+		process_connection_handle_wait_ack(ch, cqe);
 		break;
 	case CONNECTION_HANDLE_STATE_INTERVAL:
 		process_connection_handle_interval(ch, cqe);
-		break;
-	case CONNECTION_HANDLE_STATE_CLOSING:
-		process_connection_handle_closing(ch, cqe);
-		break;
-	case CONNECTION_HANDLE_STATE_DONE:
-		if (cqe->res == -ECANCELED) {
-			/* cancled recv_multishot puts a cqe with -ECANCELD. */
-			/* pass */
-		} else
-			pr_err("cqe happnes for finished connection: %d", cqe->res);
 		break;
 	default:
 		pr_err("invalid connection handle state: %d", ch->state);
@@ -632,7 +579,7 @@ static int client_loop(void)
 		}
 	}
 
-	pr_info("exit iouring");
+	pr_info("release io_uring");
 	io_uring_queue_exit(ring);
 
 	return 0;
@@ -641,45 +588,13 @@ static int client_loop(void)
 
 static int init_client_io_uring(void)
 {
-	struct io_uring_buf_reg reg = {};
-	int i, ret;
+	int ret;
 
 	ret = io_uring_queue_init(cli.o->queue_depth, ring, 0);
 	if (ret < 0) {
 		pr_err("io_uring_queue_init: %s", strerror(-ret));
 		return -1;
 	}
-
-	/* prepare provided buffer for recv_multishot */
-	if (posix_memalign((void **)&cli.recv_buf_ring, sysconf(_SC_PAGESIZE),
-			   cli.o->nr_bufs * sizeof(struct io_uring_buf_ring)) != 0) {
-		pr_err("posix_memalign: %s", strerror(errno));
-		return -1;
-	}
-	reg.ring_addr = (unsigned long)cli.recv_buf_ring;
-	reg.ring_entries = cli.o->nr_bufs;
-	reg.bgid = 0;
-	if ((ret = io_uring_register_buf_ring(ring, &reg, 0)) < 0) {
-		pr_err("io_uring_register_buf_ring: %s", strerror(-ret));
-		return -1;
-	}
-
-	/* add buffers to the buf_ring */
-	io_uring_buf_ring_init(cli.recv_buf_ring);
-	if ((cli.recv_bufs = calloc(cli.o->nr_bufs, sizeof(void *))) == NULL) {
-		pr_err("calloc: %s", strerror(errno));
-		return -1;
-	}
-	for (i = 0; i < cli.o->nr_bufs; i++) {
-		if ((cli.recv_bufs[i] = malloc(cli.o->buf_sz)) == NULL) {
-			pr_err("malloc: %s", strerror(errno));
-			return -1;
-		}
-		io_uring_buf_ring_add(cli.recv_buf_ring, cli.recv_bufs[i], cli.o->buf_sz,
-				      i, io_uring_buf_ring_mask(cli.o->nr_bufs), i);
-	}
-
-	io_uring_buf_ring_advance(cli.recv_buf_ring, cli.o->nr_bufs);
 
 	return 0;
 }

@@ -251,7 +251,7 @@ static void process_client_handle_accepted(struct client_handle *ch,
 	}
 
 	if (cqe->res == 0) {
-		pr_notice("%s: %s: close connection",
+		pr_info("%s: %s: close connection",
 			  ch->addrstr, event_type_name(ch->event));
 		goto close;
 	}

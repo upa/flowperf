@@ -39,8 +39,8 @@
  * Assumed Completion Event:
  * - EVENT_TYPE_CONNECT: connect() is done.
  *
- * After connect() successed, change the state to FLOWING by sending
- * REQ_TYPE_START_FLOW.
+ * After connect() successed, change the state to FLOWING and start to
+ * send bytes.
  */
 
 #define CONNECTION_HANDLE_STATE_FLOWING		2
@@ -53,15 +53,7 @@
  *  by sending TCP_INFO or to WAIT
  */
    
-#define CONNECTION_HANDLE_STATE_TCP_INFO	3
-/* Receving struct tcp_info
- *
- * Assumed Completion Event:
- * - EVENT_TYPE_READ: read data until sizeof(struct tcp_info) bytes received.
- *
- * After struct tcp_info received, change the state to FLOWING as the next benchmark
- * or to WAIT.
- */
+#define CONNECTION_HANDLE_STATE_WAIT_ACK	3
 
 #define CONNECTION_HANDLE_STATE_INTERVAL	4
 /* Sleep a while as flow interval time.
@@ -74,8 +66,7 @@
  */
 
 
-#define CONNECTION_HANDLE_STATE_CLOSING		5
-#define CONNECTION_HANDLE_STATE_DONE		6
+#define CONNECTION_HANDLE_STATE_DONE		5
 
 
 
@@ -86,12 +77,10 @@ inline static char connection_handle_state_name(int state)
 		return 'c';
 	case CONNECTION_HANDLE_STATE_FLOWING:
 		return 'f';
-	case CONNECTION_HANDLE_STATE_TCP_INFO:
-		return 't';
+	case CONNECTION_HANDLE_STATE_WAIT_ACK:
+		return 'a';
 	case CONNECTION_HANDLE_STATE_INTERVAL:
 		return 'i';
-	case CONNECTION_HANDLE_STATE_CLOSING:
-		return 'e';
 	case CONNECTION_HANDLE_STATE_DONE:
 		return 'd';
 	}
@@ -139,6 +128,8 @@ inline static const char *event_type_name(int type)
  * Server returns 'I' if RPC REQ is invalid.
  */
 
+#define RPC_TAIL_MARK_END	'E'
+#define RPC_TAIL_MARK_ACK	'A'
 #define RPC_TAIL_MARK_TCP_INFO	'T'
 
 #endif /* _FLOWPERF_H_ */
