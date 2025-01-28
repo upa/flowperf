@@ -258,7 +258,7 @@ static void process_client_handle_accepted(struct client_handle *ch,
 
 	switch (ch->event) {
 	case EVENT_TYPE_WRITE:
-		/* tcp_info_string was written. no need to do */
+		/* tcp_info_string or ack was written. no need to do */
 		ch->event = EVENT_TYPE_RECV;
 		if (!(IORING_CQE_F_BUFFER & cqe->flags))
 			break;
@@ -274,10 +274,19 @@ static void process_client_handle_accepted(struct client_handle *ch,
 	case EVENT_TYPE_RECV:
 		buf_id = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
 		buf = serv.recv_bufs[buf_id];
-		if (buf[cqe->res - 1] == RPC_TAIL_MARK_TCP_INFO) {
+		switch (buf[cqe->res - 1]) {
+		case RPC_TAIL_MARK_END:
+			/* send ack */
+			pr_debug("%s: send ACK", ch->addrstr);
+			ch->msg_buf[0] = RPC_TAIL_MARK_ACK;
+			put_write(ch, 1);
+			break;
+		case RPC_TAIL_MARK_TCP_INFO:
 			/* send tcp_info */
+			pr_debug("%s: send TCP_INFO", ch->addrstr);
 			ret = build_tcp_info_string(ch->sock, ch->msg_buf, MSG_BUF_SZ);
 			put_write(ch, ret);
+			break;
 		}
 
 		/* put the buffer back to the ring */
