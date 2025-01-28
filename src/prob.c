@@ -5,6 +5,7 @@
 #include <math.h>
 #include <assert.h>
 #include <stdbool.h>
+#include <linux/limits.h>
 
 #include <prob.h>
 #include <print.h>
@@ -59,8 +60,14 @@ int prob_list_load_text(prob_list_t *list, const char *path)
 	int ret;
 
 	if ((f = fopen(path, "r")) == NULL) {
-		pr_err("fopen(%s): %s", path, strerror(errno));
-		return -1;
+		/* find /usr/local/share/flowperf/examples/ */
+		char _path[PATH_MAX] = "/usr/local/share/flowperf/examples/";
+		strlcat(_path, path, PATH_MAX);
+		if ((f = fopen(_path, "r")) == NULL) {
+			pr_err("fopen(%s): %s", path, strerror(errno));
+			return -1;
+		}
+		pr_notice("loaded %s", _path);
 	}
 
 	while (fgets(buf, sizeof(buf), f)) {
