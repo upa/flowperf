@@ -21,7 +21,8 @@ struct server {
 	struct opts *o;
 	struct io_uring ring;
 
-	struct iovec send_iov[1];
+	struct io_uring_buf_ring *recv_buf_ring;
+	char **recv_bufs;	/* nr_bufs x buf_sz region for io_uring_buf_ring */
 };
 
 static struct server serv;
@@ -42,20 +43,8 @@ struct client_handle {
 	int 	state;
 	int	event;
 
-	int	send_zc_failed;
-	/* when send_zc failed, set to 1. send_zc raises two
-	 * completions: first cqe has res and IORING_CQE_F_MORE, and
-	 * the second cqe has res=0 and IORING_CQE_F_NOTIF. If
-	 * IORING_CQE_F_MORE and res < 0, send_zc_faild is set to 1.
-	 * Next, send_zc_faild == 1 and IORING_CQE_F_NOTIF is set,
-	 * close the connection due to an error.
-	 */
-
 	/* fields for an RPC transaction */
 	char	msg_buf[MSG_BUF_SZ];
-
-	ssize_t	remain_bytes;	/* remain bytes to be xmitted */
-	char	send_buf[0];	/* buf for send(_zc) follows the handle */
 };
 
 
@@ -116,7 +105,8 @@ static int init_serv_socket()
 
 static int init_serv_io_uring()
 {
-	int ret;
+	struct io_uring_buf_reg reg = {};
+	int ret, i;
 
 	ret = io_uring_queue_init(serv.o->queue_depth, ring, 0);
 	if (ret < 0) {
@@ -124,18 +114,37 @@ static int init_serv_io_uring()
 		return -1;
 	}
 
-	/* allocate and register a single send buffer for send_zc_fixed */
-	serv.send_iov[0].iov_len = serv.o->buf_sz;
-	if (posix_memalign(&serv.send_iov[0].iov_base, sysconf(_SC_PAGESIZE),
-			   serv.o->buf_sz) < 0) {
-		pr_err("posix_memalign: %s", strerror(errno));
-		return -1;
-	}
+        /* prepare provided buffer for recv_multishot */
+        if (posix_memalign((void **)&serv.recv_buf_ring, sysconf(_SC_PAGESIZE),
+                           serv.o->nr_bufs * sizeof(struct io_uring_buf_ring)) != 0) {
+                pr_err("posix_memalign: %s", strerror(errno));
+                return -1;
+        }
+        reg.ring_addr = (unsigned long)serv.recv_buf_ring;
+        reg.ring_entries = serv.o->nr_bufs;
+        reg.bgid = 0;
+        if ((ret = io_uring_register_buf_ring(ring, &reg, 0)) < 0) {
+                pr_err("io_uring_register_buf_ring: %s", strerror(-ret));
+                return -1;
+        }
+                
+        /* add buffers to the buf_ring */
+        io_uring_buf_ring_init(serv.recv_buf_ring);
+        if ((serv.recv_bufs = calloc(serv.o->nr_bufs, sizeof(char *))) == NULL) {
+                pr_err("calloc: %s", strerror(errno));
+                return -1;
+        }
+        for (i = 0; i < serv.o->nr_bufs; i++) {
+                if ((serv.recv_bufs[i] = malloc(serv.o->buf_sz)) == NULL) {
+                        pr_err("malloc: %s", strerror(errno));
+                        return -1;
+                } 
+                io_uring_buf_ring_add(serv.recv_buf_ring, serv.recv_bufs[i],
+				      serv.o->buf_sz, i,
+				      io_uring_buf_ring_mask(serv.o->nr_bufs), i);
+        }
 
-	if ((ret = io_uring_register_buffers(ring, serv.send_iov, 1)) < 0) {
-		pr_err("io_uring_register_buffers: %s", strerror(-ret));
-		return -1;
-	}
+        io_uring_buf_ring_advance(serv.recv_buf_ring, serv.o->nr_bufs);
 
 	return 0;
 }
@@ -159,15 +168,6 @@ static void put_accept_multishot(void)
 	io_uring_sqe_set_data(sqe, &ch);
 }
 
-static void put_read(struct client_handle *ch)
-{
-	struct io_uring_sqe *sqe = io_uring_get_sqe_always(ring);
-	memset(ch->msg_buf, 0, sizeof(MSG_BUF_SZ));
-	ch->event = EVENT_TYPE_READ;
-	io_uring_prep_read(sqe, ch->sock, ch->msg_buf, MSG_BUF_SZ, 0);
-	io_uring_sqe_set_data(sqe, ch);
-}
-
 static void put_write(struct client_handle *ch, size_t len)
 {
 	struct io_uring_sqe *sqe = io_uring_get_sqe_always(ring);
@@ -176,36 +176,26 @@ static void put_write(struct client_handle *ch, size_t len)
 	io_uring_sqe_set_data(sqe, ch);
 }
 
-static void put_write_rep_invalid(struct client_handle *ch)
-{
-	struct io_uring_sqe *sqe = io_uring_get_sqe_always(ring);
-	static char ri_buf[] = "I\n";
-
-	ch->state = CLIENT_HANDLE_STATE_ACCEPTED;
-	ch->event = EVENT_TYPE_WRITE;
-	io_uring_prep_write(sqe, ch->sock, ri_buf, array_size(ri_buf), 0);
-	io_uring_sqe_set_data(sqe, ch);
-}
-
-static void put_send(struct client_handle *ch, size_t len)
-{
-	struct io_uring_sqe *sqe = io_uring_get_sqe_always(ring);
-	ch->event = EVENT_TYPE_SEND;
-	if (serv.o->send_zero_copy)
-		io_uring_prep_send_zc_fixed(sqe, ch->sock,
-					    serv.send_iov[0].iov_base,
-					    len, 0, 0, 0);
-	else
-		io_uring_prep_send(sqe, ch->sock, ch->send_buf, len, 0);
-	io_uring_sqe_set_data(sqe, ch);
-}
+static void put_recv_multishot(struct client_handle *ch)
+{               
+        struct io_uring_sqe *sqe = io_uring_get_sqe_always(ring);
+        ch->event = EVENT_TYPE_RECV;
+        io_uring_prep_recv_multishot(sqe, ch->sock, NULL, 0, 0);
+        sqe->flags |= IOSQE_BUFFER_SELECT;
+        sqe->buf_group = 0;
+        io_uring_sqe_set_data(sqe, ch);
+}               
 
 static void close_client_handle(struct client_handle *ch)
 {
-	pr_debug("%s: close connection", ch->addrstr);
-	if (ch->sock > 1)
-		close(ch->sock);
-	free(ch);
+	struct io_uring_sqe *sqe = io_uring_get_sqe_always(ring);
+
+	/* cancel recv multishot and set state CLOSING. */
+	pr_debug("%s: cancel recv multishot for fd=%d", ch->addrstr, ch->sock);
+	ch->state = CLIENT_HANDLE_STATE_CLOSING;
+	ch->event = EVENT_TYPE_CANCEL;
+	io_uring_prep_cancel(sqe, ch, 0);
+	io_uring_sqe_set_data(sqe, ch);
 }
 
 static void process_client_handle_accepting(struct client_handle *ch_accept,
@@ -216,19 +206,19 @@ static void process_client_handle_accepting(struct client_handle *ch_accept,
 	assert(ch_accept->event == EVENT_TYPE_ACCEPT);
 
 	/* multishot accept() returns a new socket. allocate a new
-	 * client_handle, and put read for waiting an RPC request.
+	 * client_handle, and put recv_multishot for this client.
 	 */
 	if (cqe->res < 0) {
 		pr_warn("accept: %s", strerror(-cqe->res));
 		return;
 	}
-	if ((ch = malloc(sizeof(*ch) + serv.o->buf_sz)) == NULL) {
+	if ((ch = malloc(sizeof(*ch))) == NULL) {
 		pr_err("malloc: %s", strerror(errno));
 		close(cqe->res);
 		return;
 	}
 	memset(ch, 0, sizeof(*ch));
-	memset(ch->send_buf, '!', serv.o->buf_sz);
+
 	ch->sock = cqe->res;
 	ch->addrlen = sizeof(ch->addr);
 	if (getpeername(ch->sock, (struct sockaddr *)&ch->addr, &ch->addrlen) < 0) {
@@ -243,77 +233,63 @@ static void process_client_handle_accepting(struct client_handle *ch_accept,
 		pr_warn("%s: setoskcopt(TCP_NODELAY): %s", ch->addrstr, strerror(errno));
 
 	ch->state = CLIENT_HANDLE_STATE_ACCEPTED;
-	put_read(ch);
-}
-
-void move_client_handle_flowing(struct client_handle *ch, ssize_t bytes)
-{
-	/* start RPC FLOWING */
-	pr_debug("%s: START FLOW %zd", ch->addrstr, bytes);
-	ch->state = CLIENT_HANDLE_STATE_FLOWING;
-	ch->remain_bytes = bytes;
-	put_send(ch, min(ch->remain_bytes, serv.o->buf_sz));
-}
-
-void move_client_handle_tcp_info(struct client_handle *ch)
-{
-	/* Start RPC TCP_INFO */
-	int ret;
-
-	pr_debug("%s: RPC TCP_INFO", ch->addrstr);
-
-	ret = build_tcp_info_string(ch->sock, ch->msg_buf, MSG_BUF_SZ);
-	if (ret < 0 || MSG_BUF_SZ <= ret) {
-		pr_err("build_tcp_info_string failed: %d", ret);
-		put_write_rep_invalid(ch);
-		return;
-	}
-
-	ch->state = CLIENT_HANDLE_STATE_TCP_INFO;
-	ch->remain_bytes = ret;
-	put_write(ch, min(ret, MSG_BUF_SZ));
+	ch->event = EVENT_TYPE_RECV;
+	put_recv_multishot(ch);
 }
 
 static void process_client_handle_accepted(struct client_handle *ch,
 					   struct io_uring_cqe *cqe)
 {
-	if (ch->event != EVENT_TYPE_WRITE && ch->event != EVENT_TYPE_READ) {
-		pr_err("invalid state/event pair: state=%d event=%d",
-		       ch->state, ch->event);
-		close_client_handle(ch);
-		return;
-	}
+	int buf_id;
+	char *buf;
+	int ret;
 
-	if (ch->event == EVENT_TYPE_WRITE) {
-		/* error has been sent. put a read event for the next request */
-		put_read(ch);
-		return;
-	}
-
-	/* here we assume EVENT_TYPE_READ */
 	if (cqe->res < 0) {
-		pr_warn("%s: read: %s, connection closed",
-			ch->addrstr, strerror(-cqe->res));
+		pr_warn("%s: %s: %s, close connection",
+			ch->addrstr, event_type_name(ch->event), strerror(-cqe->res));
 		goto close;
 	}
+
 	if (cqe->res == 0) {
-		pr_info("%s: connection closed", ch->addrstr);
+		pr_notice("%s: %s: close connection",
+			  ch->addrstr, event_type_name(ch->event));
 		goto close;
 	}
 
-	ch->msg_buf[MSG_BUF_SZ] = '\0';
+	switch (ch->event) {
+	case EVENT_TYPE_WRITE:
+		/* tcp_info_string was written. no need to do */
+		ch->event = EVENT_TYPE_RECV;
+		if (!(IORING_CQE_F_BUFFER & cqe->flags))
+			break;
 
-	/* handle is ACCPETED, and read event occurs, which means a
-	 * new RPC request has come. Process it.
-	 */
-	ssize_t bytes;
-	if (sscanf(ch->msg_buf, RPC_REQ_START_FLOW " %zd", &bytes) == 1 && bytes > 0)
-		move_client_handle_flowing(ch, bytes);
-	else if (strncmp(ch->msg_buf, RPC_REQ_TCP_INFO, strlen(RPC_REQ_TCP_INFO)) == 0)
-		move_client_handle_tcp_info(ch);
-	else {
-		pr_warn("%s: invalid request: %s", ch->addrstr, ch->msg_buf);
-		put_write_rep_invalid(ch);
+		/* fall through:
+		 *
+		 * If IORING_CQE_F_BUFFER is set on cqe->flaags, this
+		 * CQE is (unintendedly) for recv multishot. We need
+		 * to release the buffer.
+		 */
+		pr_warn("event type is WIRTE, but IORING_CQE_F_BUFFER is set");
+
+	case EVENT_TYPE_RECV:
+		buf_id = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
+		buf = serv.recv_bufs[buf_id];
+		if (buf[cqe->res - 1] == RPC_TAIL_MARK_TCP_INFO) {
+			/* send tcp_info */
+			ret = build_tcp_info_string(ch->sock, ch->msg_buf, MSG_BUF_SZ);
+			put_write(ch, ret);
+		}
+
+		/* put the buffer back to the ring */
+                io_uring_buf_ring_add(serv.recv_buf_ring, serv.recv_bufs[buf_id],
+                                      serv.o->buf_sz, buf_id,
+                                      io_uring_buf_ring_mask(serv.o->nr_bufs), 0);
+                io_uring_buf_ring_advance(serv.recv_buf_ring, 1);
+		break;
+
+	default:
+		pr_err("invalid event type %d", ch->event);
+		goto close;
 	}
 
 	return;
@@ -322,108 +298,32 @@ close:
 	close_client_handle(ch);
 }
 
-static void process_client_handle_flowing(struct client_handle *ch,
-					  struct io_uring_cqe *cqe)
-{
-	if (ch->event != EVENT_TYPE_SEND) {
-		pr_err("invalid state/event pair: state=%d event=%d",
-		       ch->state, ch->event);
-		close_client_handle(ch);
-		return;
-	}
-
-	/* handle is FLOWING. send or send_zc raises completions.
-	 */
-	if (cqe->res < 0) {
-		if (cqe->flags & IORING_CQE_F_MORE) {
-			/* multi CQEs for send_zc. defer closing the
-			 * socket until cqe with IORING_CQE_F_NOTIF
-			 * has come.
-			 */
-			pr_notice("%s: send_zc: %s, prepare for closing connection",
-				  ch->addrstr, strerror(-cqe->res));
-			ch->send_zc_failed = 1;
-		} else {
-			/* not multi CQEs && send return < 0 vlue.
-			 * close the connection due to error. */
-			pr_notice("%s: send: %s, close connection",
-				  ch->addrstr, strerror(-cqe->res));
-			close_client_handle(ch);
-		}
-		return;
-	}
-	if (ch->send_zc_failed && cqe->flags & IORING_CQE_F_NOTIF) {
-		close_client_handle(ch);
-		return;
-	}
-
-	ch->remain_bytes -= cqe->res;
-
-	if (cqe->flags & IORING_CQE_F_MORE)
-		return; /* more cqe for the last write (send_zc) will come */
-
-	if (ch->remain_bytes > 0) {
-		/* we need to send more bytes. put a new send */
-		put_send(ch, min(ch->remain_bytes, serv.o->buf_sz));
-	} else {
-		/* all bytes transfered */
-		pr_debug("%s: RPC FLOW finished", ch->addrstr);
-		ch->state = CLIENT_HANDLE_STATE_ACCEPTED;
-		put_read(ch);
-	}
-
-	return;
-}
-
-static void process_client_handle_tcp_info(struct client_handle *ch,
-					   struct io_uring_cqe *cqe)
-{
-	if (ch->event != EVENT_TYPE_WRITE) {
-		pr_err("invalid state/event pair: state=%d event=%d",
-		       ch->state, ch->event);
-		close_client_handle(ch);
-		return;
-	}
-	
-	/* handle is TCP_INFO, we have sent tcp_info string on
-	 * ch->msg_buf. Next is to change the state to ACCEPTED.
-	 */
-	if (cqe->res < 0) {
-		pr_notice("%s: write: %s, close connection",
-			  ch->addrstr, strerror(-cqe->res));
-		return;
-	}
-
-	ch->remain_bytes -= cqe->res;
-	if (ch->remain_bytes > 0)
-		pr_warn("%s: send tcp_info truncated %ld bytes",
-			ch->addrstr, ch->remain_bytes);
-
-	pr_debug("%s: RPC TCP_INFO finished", ch->addrstr);
-	ch->state = CLIENT_HANDLE_STATE_ACCEPTED;
-	put_read(ch);
-
-	return;
-}
 
 
 static void server_process_cqe(struct io_uring_cqe *cqe) 
 {
 	struct client_handle *ch = io_uring_cqe_get_data(cqe);
 
+	if (cqe->res == -ECANCELED) {
+		/* canceled recv multishot may raises -ECANCEL cqe */
+		return;
+	}
+
 	switch (ch->state) {
 	case CLIENT_HANDLE_STATE_ACCEPTING:
 		process_client_handle_accepting(ch, cqe);
 		break;
+
 	case CLIENT_HANDLE_STATE_ACCEPTED:
 		process_client_handle_accepted(ch, cqe);
 		break;
-	case CLIENT_HANDLE_STATE_FLOWING:
-		process_client_handle_flowing(ch, cqe);
+
+	case CLIENT_HANDLE_STATE_CLOSING:
+		pr_debug("%s: release connection resource", ch->addrstr);
+		close(ch->sock);
+		free(ch);
 		break;
-	case CLIENT_HANDLE_STATE_TCP_INFO:
-		process_client_handle_tcp_info(ch, cqe);
-		break;
+
 	default:
 		pr_err("invalid client handle state: %d", ch->state);
 		close_client_handle(ch);

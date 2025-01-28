@@ -11,37 +11,22 @@
  * an ACCEPT event.
  *
  * Assumed Completion Event:
- * - EVENT_TYPE_ACCEPT: Change state to ACCEPTED, and post EVENT_TYPE_READ.
+ * - EVENT_TYPE_ACCEPT: Change state to ACCEPTED, and post recv muiltishot.
  */
 
 #define CLIENT_HANDLE_STATE_ACCEPTED	2
-/* Stable state. A client TCP connection is accpeted, and waiting for
- * an RPC request by posting a READ event.
+/* Stable state. A client TCP connection is accpeted, and waiting
  *
  * Assumed Completion Event:
- * - EVENT_TYPE_READ: Change the state to FLOWING or TCP_INFO accroing to
- *   the RPC request read from the socket.
+ * - EVENT_TYPE_RECV: consumes received bytes. If the last of byte on a received
+ *   received message, the server sends tcp_info string to the client.
+ * - EVENT_TYPE_WRITE: completion for tcp_info sent.
  */
 
-#define CLIENT_HANDLE_STATE_FLOWING	3
-/* Sending flow. Write data to the client socket until
- * start_flow->size bytes transferred.
- *
- * Assumed Completion Event:
- * - EVENT_TYPE_WRITE: Write date to the client socket until
- *   start_flow->size bytes transmitted.
- *
- * After the flow transferred, change the state to ACCEPTED or TCP_INFO.
+#define CLIENT_HANDLE_STATE_CLOSING	3
+/* Closing Connection puts cancel sqe to stop recv multishot for this client.
  */
-
-#define CLIENT_HANDLE_STATE_TCP_INFO	4
-/* Sending struct tcp_info of this client socket.
- * 
- * Assumed Completion Event:
- * - EVENT_TYPE_WRITE: Write tcp_info to the client socket.
- *
- * After the write event completed, change the state to ACCEPTED.
- */
+  
 
 
 
@@ -123,6 +108,15 @@ inline static char connection_handle_state_name(int state)
 #define EVENT_TYPE_TIMEOUT	6
 #define EVENT_TYPE_CANCEL	7
 
+inline static const char *event_type_name(int type)
+{
+	static const char *type_names[] = {
+		"accept", "connect", "read", "write",
+		"send", "recv",
+		"timeout", "cancel"
+	};
+	return type_names[type];
+}
 
 
 /* RPC Request Format. */
@@ -144,5 +138,7 @@ inline static char connection_handle_state_name(int state)
  *
  * Server returns 'I' if RPC REQ is invalid.
  */
+
+#define RPC_TAIL_MARK_TCP_INFO	'T'
 
 #endif /* _FLOWPERF_H_ */

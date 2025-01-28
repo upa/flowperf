@@ -74,6 +74,7 @@ int build_tcp_info_string(int sock, char *buf, size_t size)
 	 * tcpi_retransmits: the number of segments retransmitted by
 	 * RTO or fast retransmission during the connection.
 	 */
+	memset(buf, 0, size);
 	return snprintf(buf, size,
 			"lost=%u,"	/* tcpi_lost 		*/
 			"sack=%u,"	/* tcpi_sacked		*/
