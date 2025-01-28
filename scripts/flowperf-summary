@@ -65,7 +65,7 @@ class Record:
 def parse_flowperf_output(out:str) -> list[Record]:
     records = []
     for line in map(lambda l: l.strip(), out.split("\n")):
-        if not line:
+        if not line or not line.startswith("state="):
             continue
         r = Record(line)
         records.append(r)
