@@ -19,7 +19,7 @@
 #define DEFAULT_QUEUE_DEPTH	512
 
 #define MIN_BUF_SZ		(1 << 18)	/* 256KB */
-#define MIN_NR_BUFS		512		/* 256KB * 512 = 128MB */
+#define MIN_NR_BUFS		1024		/* 256KB * 512 = 256MB */
 
 #define DEFAULT_BATCH_SZ	32
 #define MAX_BATCH_SZ		(DEFAULT_QUEUE_DEPTH >> 1)
@@ -43,8 +43,6 @@ struct opts {
 
 	/* server options */
 	char	*local_addr;
-	int	nr_bufs;	/* number of buffers to be registered to io_uring */
-	bool	send_zero_copy;
 
 	/* client options */
 	int     nr_flows;
@@ -52,6 +50,7 @@ struct opts {
 	int 	concurrency;
 	bool	server_tcp_info;	/* get tcp_info from the server side */
 	unsigned int     random_seed;
+	int	nr_bufs;	/* number of buffers to be registered to io_uring */
 
 	prob_list_t *addrs;
 	prob_list_t *flows;

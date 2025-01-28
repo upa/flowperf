@@ -18,13 +18,14 @@
 /* strcture representing flowperf client process */
 struct client {
 	struct opts *o;
-	struct iovec *registered;
 
 	/* easy list with connection_handle->next  */
 	struct connection_handle *first, *last;
 
 	int nr_flows_started;
 	int nr_flows_done;
+
+	struct timespec start_time;
 
 	struct io_uring ring;
 };
@@ -234,8 +235,8 @@ void print_connection_handle_result(FILE *fp, struct connection_handle *ch)
 		       "dst=%s "
 		       "flow_size=%lu "
 		       "remain=%lu "
-		       "start=%lu "
-		       "end=%lu "
+		       "start=%lld "
+		       "end=%lld "
 		       "time2conn=%lld "
 		       "time2flow=%lld "
 		       "tcp_c=%s",
@@ -243,8 +244,8 @@ void print_connection_handle_result(FILE *fp, struct connection_handle *ch)
 		       ch->pa->addrstr,
 		       ch->pf->bytes,
 		       ch->remain_bytes,
-		       timespec_nsec(&ch->ts_start),
-		       timespec_nsec(&ch->ts_flow_end),
+		       timespec_sub_nsec(&ch->ts_start, &cli.start_time),
+		       timespec_sub_nsec(&ch->ts_flow_end, &cli.start_time),
 		       timespec_sub_nsec(&ch->ts_flow_start, &ch->ts_start),
 		       timespec_sub_nsec(&ch->ts_flow_end, &ch->ts_flow_start),
 		       ch->tcp_info_c
@@ -335,7 +336,9 @@ static void put_write_flowing(struct connection_handle *ch)
 {
 	size_t send_sz = min(ch->remain_bytes, cli.o->buf_sz);
 
-	ch->send_buf[send_sz - 1] = '!'; /* this byte may be 'E' for last flowing */
+	/* this byte may be other char on last flowing. clear it */
+	ch->send_buf[send_sz - 1] = '!';
+
 	if (send_sz == ch->remain_bytes) {
 		/* this is the last segment, put T or E */
 		if (cli.o->server_tcp_info)
@@ -478,7 +481,7 @@ static void process_connection_handle_wait_ack(struct connection_handle *ch,
 	}
 
 	if (!cli.o->server_tcp_info && ch->msg_buf[0] != RPC_TAIL_MARK_ACK) {
-		pr_err("%s: unexpected tail mark for ack: %c",
+		pr_err("%s: unexpected tail mark for ack: '%c'",
 		       ch->pa->addrstr, ch->msg_buf[0]);
 		goto close;
 	}
@@ -665,6 +668,8 @@ int start_client(struct opts *o)
 		alarm(cli.o->duration);
 	}
 
+
+	clock_gettime(CLOCK_MONOTONIC, &cli.start_time);
 
 	ret = client_loop();
 

@@ -244,15 +244,14 @@ static void process_client_handle_accepted(struct client_handle *ch,
 	char *buf;
 	int ret;
 
-	if (cqe->res < 0) {
-		pr_warn("%s: %s: %s, close connection",
-			ch->addrstr, event_type_name(ch->event), strerror(-cqe->res));
-		goto close;
-	}
-
-	if (cqe->res == 0) {
-		pr_info("%s: %s: close connection",
-			  ch->addrstr, event_type_name(ch->event));
+	if (cqe->res <= 0) {
+		if (cqe->res < 0)
+			pr_warn("%s: %s: %s, close connection",
+				ch->addrstr, event_type_name(ch->event),
+				strerror(-cqe->res));
+		else
+			pr_info("%s: %s: close connection",
+				ch->addrstr, event_type_name(ch->event));
 		goto close;
 	}
 

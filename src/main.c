@@ -27,17 +27,18 @@ static void usage()
 		"    -h              print this help\n"
 		"\n"
 		"  Server mode options\n"
-		"    -a ADDRESS        local address to bind\n"
-		"    -z                use tx zero copy\n"
+		"    -a ADDRESS      local address to bind\n"
+		"    -N NR_BUFS      number of buffer regions for recv (default %d):\n"
+		"                    BUF_SIZE x NR_BUFS memory regions are registered\n"
+		"                    to io_uring via io_uring_register_buf_ring()\n"
+		"\n"
 		"\n"
 		"  Client mode options\n"
 		"    -n NUMBER       number of flows to be done, default 0 (inifinit)\n"
 		"    -t DURATION     test duration (sec), default 10, 0 means inifnite\n"
 		"    -x CONCURRENCY  number of cunccurent flows\n"
-		"    -N NR_BUFS      number of buffer regions for recv (default %d):\n"
-		"                    BUF_SIZE x NR_BUFS memory regions are registered\n"
-		"                    to io_uring via io_uring_register_buf_ring()\n"
-		"    -T              get tcp_info from the server side for each RPC\n"
+		"    -T              get tcp_info from the server side for each flow\n"
+		"\n"
 		"    -R RANDOM_SEED  set random seed\n"
 		"\n"
 		"    -d ADDR:PROB    dest address and its probability\n"
@@ -86,8 +87,8 @@ static int parse_args(int argc, char **argv, struct opts *o)
 		return -1;
 
 #define OPTSTR_COMMON "scp:B:q:b:vh"
-#define OPTSTR_SERVER "a:z"
-#define OPTSTR_CLIENT "n:t:x:N:TR:d:D:f:F:i:I:"
+#define OPTSTR_SERVER "a:N:"
+#define OPTSTR_CLIENT "n:t:x:TR:d:D:f:F:i:I:"
 #define OPTSTR OPTSTR_COMMON OPTSTR_SERVER OPTSTR_CLIENT
 
 	while ((ch = getopt(argc, argv, OPTSTR)) != -1) {
@@ -129,8 +130,13 @@ static int parse_args(int argc, char **argv, struct opts *o)
 		case 'a': /* server options */
 			o->local_addr = optarg;
 			break;
-		case 'z':
-			o->send_zero_copy = true;
+		case 'N':
+			o->nr_bufs = atoi(optarg);
+			if (o->nr_bufs < MIN_NR_BUFS) {
+				pr_err("invalid nr_bufs %s (must be ge %d)",
+				       optarg, MIN_NR_BUFS);
+				return -1;
+			}
 			break;
 
 		case 'n': /* client options */
@@ -151,14 +157,6 @@ static int parse_args(int argc, char **argv, struct opts *o)
 			o->concurrency = atoi(optarg);
 			if (o->concurrency < 1) {
 				pr_err("invalid concurrency: %s", optarg);
-				return -1;
-			}
-			break;
-		case 'N':
-			o->nr_bufs = atoi(optarg);
-			if (o->nr_bufs < MIN_NR_BUFS) {
-				pr_err("invalid nr_bufs %s (must be ge %d)",
-				       optarg, MIN_NR_BUFS);
 				return -1;
 			}
 			break;
