@@ -194,7 +194,7 @@ static void close_client_handle(struct client_handle *ch)
 	pr_debug("%s: cancel recv multishot for fd=%d", ch->addrstr, ch->sock);
 	ch->state = CLIENT_HANDLE_STATE_CLOSING;
 	ch->event = EVENT_TYPE_CANCEL;
-	io_uring_prep_cancel(sqe, ch, 0);
+	io_uring_prep_cancel_fd(sqe, ch->sock, 0);
 	io_uring_sqe_set_data(sqe, ch);
 }
 
@@ -253,13 +253,17 @@ static void process_client_handle_accepted(struct client_handle *ch,
 			pr_info("%s: %s: close connection",
 				ch->addrstr, event_type_name(ch->event));
 		goto close;
+		/* XXX: when a client closes socket, recv multishot
+		 * returns 0 and is stoped. So no need to cancel the
+		 * recv multishot.
+		 */
 	}
 
 	switch (ch->event) {
 	case EVENT_TYPE_WRITE:
 		/* tcp_info_string or ack was written. no need to do */
 		ch->event = EVENT_TYPE_RECV;
-		if (!(IORING_CQE_F_BUFFER & cqe->flags))
+		if (!(cqe->flags & IORING_CQE_F_BUFFER))
 			break;
 
 		/* fall through:
@@ -327,7 +331,20 @@ static void server_process_cqe(struct io_uring_cqe *cqe)
 		break;
 
 	case CLIENT_HANDLE_STATE_CLOSING:
-		pr_debug("%s: release connection resource", ch->addrstr);
+		if (cqe->res > 0) {
+			/* XXX: When a client close a socket, recv
+			 * multishot returns 0 before write() for ACK
+			 * returns a cqe. Skip such deferred write
+			 * completion. This is a work around. We need
+			 * more sphisticated async syscall
+			 * hannldling...
+			 */
+			pr_info("cancelling connection returns cqe->res=%d (> 0). "
+				"I know this is bad code",
+				cqe->res);
+			break;
+		}
+		pr_debug("%s: release connection", ch->addrstr);
 		close(ch->sock);
 		free(ch);
 		break;
