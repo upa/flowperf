@@ -161,11 +161,11 @@ static void release_client_handle(struct client_handle *ch)
 	if (io_event_is_posted(&ch->e_recv) ||
 	    io_event_is_posted(&ch->e_write) ||
 	    io_event_is_posted(&ch->e_cancel)) {
-		pr_debug("%s: there is a posted io, defer releaseing handle",
+		pr_debug("%s: there is unacked io event(s), defer releaseing handle",
 			 ch->addrstr);
 		return;
 	}
-	pr_debug("%s: release connection", ch->addrstr);
+	pr_debug("%s: connection closed", ch->addrstr);
 	close(ch->sock);
 	free(ch);
 }
@@ -173,6 +173,8 @@ static void release_client_handle(struct client_handle *ch)
 static void close_client_handle(struct client_handle *ch)
 {
 	ch->state = CLIENT_HANDLE_STATE_CLOSING;
+
+	pr_debug("%s: closing connection", ch->addrstr);
 
 	if (io_event_is_posted(&ch->e_recv)) {
 		/* cancel recv multishot and set state CLOSING. */

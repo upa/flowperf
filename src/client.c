@@ -273,7 +273,6 @@ static void print_result(FILE *fp)
 static int post_new_connect(void)
 {
 	struct connection_handle *ch;
-	struct io_uring_sqe *sqe;
 
 	if (cli.o->nr_flows > 0) {
 		/* number of flows to be done is specified. Don't
@@ -355,6 +354,8 @@ static void close_connection_handle(struct connection_handle *ch)
 	    io_event_is_posted(&ch->e_read) ||
 	    io_event_is_posted(&ch->e_timeout)) {
 		/* still there is a posted io. defer closing */
+		pr_debug("%s: there is unacked io event(s). defer closing connection",
+			ch->pa->addrstr);
 		return;
 	}
 
@@ -386,12 +387,7 @@ static void process_connection_handle_connecting(struct connection_handle *ch,
 						 struct io_event *e,
 						 struct io_uring_cqe *cqe)
 {
-	if (e->type != EVENT_TYPE_CONNECT) {
-		pr_err("invalid state/event pair: state=%d event=%d",
-		       ch->state, e->type);
-		close_connection_handle(ch);
-		return;
-	}
+	assert(e->type == EVENT_TYPE_CONNECT);
 
 	/* handle is CONNECTION, and connect() completed. Start Flowing
 	 */
@@ -414,12 +410,7 @@ static void process_connection_handle_flowing(struct connection_handle *ch,
 					      struct io_event *e,
 					      struct io_uring_cqe *cqe)
 {
-	if (e->type != EVENT_TYPE_WRITE) {
-		pr_err("invalid state/event pair: state=%d event=%d",
-		       ch->state, e->type);
-		close_connection_handle(ch);
-		return;
-	}
+	assert(e->type == EVENT_TYPE_WRITE);
 
 	if (cqe->res <= 0) {
 		pr_warn("%s: write: %s", ch->pa->addrstr, strerror(-cqe->res));
@@ -453,11 +444,7 @@ static void process_connection_handle_wait_ack(struct connection_handle *ch,
 					       struct io_event *e,
 					       struct io_uring_cqe *cqe)
 {
-	if (e->type != EVENT_TYPE_READ) {
-		pr_err("invalid state/event pair: state=%d event=%d",
-		       ch->state, e->type);
-		goto close;
-	}
+	assert(e->type == EVENT_TYPE_READ);
 
 	if (cqe->res <= 0) {
 		if (cqe->res < 0)
@@ -478,12 +465,14 @@ static void process_connection_handle_wait_ack(struct connection_handle *ch,
 
 	if (ch->pi) {
 		/* sleep interval */
+		ch->state = CONNECTION_HANDLE_STATE_INTERVAL;
 		post_timeout(ring, &ch->e_timeout, ch->pi->interval);
 		return;
 	}
 
 	/* nothing to do. close! */
 	ch->state = CONNECTION_HANDLE_STATE_DONE;
+
 close:
 	close_connection_handle(ch);
 }
@@ -492,10 +481,7 @@ static void process_connection_handle_interval(struct connection_handle *ch,
 					       struct io_event *e,
 					       struct io_uring_cqe *cqe)
 {
-	if (e->type != EVENT_TYPE_TIMEOUT) {
-		pr_err("invalid state/event pair: state=%d event=%d",
-		       ch->state, e->type);
-	}
+	assert(e->type == EVENT_TYPE_TIMEOUT);
 	close_connection_handle(ch);
 }
 
