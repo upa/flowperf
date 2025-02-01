@@ -51,6 +51,7 @@ struct opts {
 	bool	server_tcp_info;	/* get tcp_info from the server side */
 	unsigned int     random_seed;
 	int	nr_bufs;	/* number of buffers to be registered to io_uring */
+	bool 	cache_sockets;
 
 	prob_list_t *addrs;
 	prob_list_t *flows;

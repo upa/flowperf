@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
 #include <signal.h>
 #include <sys/socket.h>
 #include <netdb.h>
@@ -97,4 +98,40 @@ void stop_running(void) {
 bool is_running(void)
 {
 	return (run != 0);
+}
+
+
+/* stack of integer, for socket cache */
+int_stack_t *int_stack_alloc(size_t size)
+{
+	int_stack_t *stack;
+
+	if ((stack = malloc(sizeof(*stack))) == NULL)
+		return NULL;
+
+	if ((stack->stack = calloc(size, sizeof(int))) == NULL) {
+		free(stack);
+		return NULL;
+	}
+
+	stack->size = size;
+	stack->len = 0;
+	return stack;
+}
+
+size_t int_stack_len(int_stack_t *stack)
+{
+	return stack->len;
+}
+
+void int_stack_push(int_stack_t *stack, int v)
+{
+	assert(stack->len < stack->size);
+	stack->stack[stack->len++] = v;
+}
+
+int int_stack_pop(int_stack_t *stack)
+{
+	assert(stack->len > 0);
+	return stack->stack[--stack->len];
 }

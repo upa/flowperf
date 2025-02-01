@@ -34,4 +34,16 @@ void start_running(void);
 void stop_running(void);
 bool is_running(void);
 
+/* stack for socket cache */
+typedef struct int_stack_struct {
+	int *stack;
+	size_t size;	/* size of this stack */
+	size_t len;	/* current length (number of pusehd integers )*/
+} int_stack_t;
+
+int_stack_t *int_stack_alloc(size_t size);
+size_t int_stack_len(int_stack_t *stack);
+void int_stack_push(int_stack_t *stack, int v);
+int int_stack_pop(int_stack_t *stack);
+
 #endif

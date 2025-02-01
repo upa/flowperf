@@ -46,6 +46,8 @@ typedef struct prob_addr_struct {
 	int		socktype;
 	int 		protocol;
 	char 		addrstr[ADDRSTRLEN];
+
+	int_stack_t	*sock_cache;
 } prob_addr_t;
 
 /* o->flows->probs[n].data */
@@ -92,6 +94,13 @@ static int prob_list_iter_addr(prob_t *prob)
 	pa->socktype = res->ai_socktype;
 	pa->protocol = res->ai_protocol;
 	freeaddrinfo(res);
+
+	if (cli.o->cache_sockets) {
+		if ((pa->sock_cache = int_stack_alloc(cli.o->concurrency)) == NULL) {
+			pr_err("int_stack_alloc: %s", strerror(errno));
+			return -1;
+		}
+	}
 
 	prob->data = pa;
 	return 0;
@@ -269,6 +278,33 @@ static void print_result(FILE *fp)
 		print_connection_handle_result(fp, ch);
 }
 
+static void post_write_flowing(struct connection_handle *ch)
+{
+	size_t send_sz = min(ch->remain_bytes, cli.o->buf_sz);
+
+	/* this byte may be other char on last flowing. clear it */
+	ch->send_buf[send_sz - 1] = '!';
+
+	if (send_sz == ch->remain_bytes) {
+		/* this is the last segment, put T or E */
+		if (cli.o->server_tcp_info)
+			ch->send_buf[send_sz - 1] = RPC_TAIL_MARK_TCP_INFO;
+		else
+			ch->send_buf[send_sz - 1] = RPC_TAIL_MARK_END;
+	}
+
+	post_write(ring, &ch->e_write, ch->sock, ch->send_buf, send_sz);
+}
+
+static void start_flowing(struct connection_handle *ch)
+{
+	pr_debug("%s: start flowing %lu bytes", ch->pa->addrstr, ch->pf->bytes);
+	tsq_append(&ch->ts_flow_start);
+	ch->remain_bytes = ch->pf->bytes;
+	ch->state = CONNECTION_HANDLE_STATE_FLOWING;
+	ch->remain_bytes = ch->pf->bytes;
+	post_write_flowing(ch);
+}
 
 static int post_new_connect(void)
 {
@@ -283,7 +319,7 @@ static int post_new_connect(void)
 		cli.nr_flows_started++;
 	}
 
-	pr_debug("put a new connect() event");
+	pr_debug("post a new connection");
 
 	if ((ch = malloc(sizeof(*ch))) == NULL) {
 		pr_err("malloc: %s", strerror(errno));
@@ -309,6 +345,16 @@ static int post_new_connect(void)
 		NULL : prob_list_pickup_data_uniformly(cli.o->intervals);
 
 	prob_addr_t *pa = ch->pa;
+
+	if (pa->sock_cache && int_stack_len(pa->sock_cache) > 0) {
+		/* use a cached socket if exists */
+		pr_debug("%s: reuse cached socket", pa->addrstr);
+		ch->sock = int_stack_pop(pa->sock_cache);
+		connection_handle_append(ch);
+		start_flowing(ch);
+		return 0;
+	}
+
 	int v = 1;
 	if ((ch->sock = socket(pa->family, pa->socktype, pa->protocol)) < 0) {
 		pr_err("socket(): %s", strerror(errno));
@@ -328,25 +374,6 @@ static int post_new_connect(void)
 }
 
 
-static void post_write_flowing(struct connection_handle *ch)
-{
-	size_t send_sz = min(ch->remain_bytes, cli.o->buf_sz);
-
-	/* this byte may be other char on last flowing. clear it */
-	ch->send_buf[send_sz - 1] = '!';
-
-	if (send_sz == ch->remain_bytes) {
-		/* this is the last segment, put T or E */
-		if (cli.o->server_tcp_info)
-			ch->send_buf[send_sz - 1] = RPC_TAIL_MARK_TCP_INFO;
-		else	
-			ch->send_buf[send_sz - 1] = RPC_TAIL_MARK_END;
-	}
-
-	post_write(ring, &ch->e_write, ch->sock, ch->send_buf, send_sz);
-}
-
-
 static void close_connection_handle(struct connection_handle *ch)
 {
 	if (io_event_is_posted(&ch->e_write) ||
@@ -359,9 +386,14 @@ static void close_connection_handle(struct connection_handle *ch)
 		return;
 	}
 
-	pr_debug("%s: close connection", ch->pa->addrstr);
+	if (ch->pa->sock_cache && ch->state == CONNECTION_HANDLE_STATE_DONE) {
+		pr_debug("%s: cache socket for reuse connection", ch->pa->addrstr);
+		int_stack_push(ch->pa->sock_cache, ch->sock);
+	} else {
+		pr_debug("%s: close connection", ch->pa->addrstr);
+		close(ch->sock);
+	}
 
-	close(ch->sock);
 	free(ch->send_buf);
 	ch->send_buf = NULL;
 
@@ -397,12 +429,9 @@ static void process_connection_handle_connecting(struct connection_handle *ch,
 		return;
 	}
 
-	pr_debug("%s: start flowing %lu bytes", ch->pa->addrstr, ch->remain_bytes);
-	tsq_append(&ch->ts_flow_start);
+	pr_debug("%s: connected", ch->pa->addrstr);
 
-	ch->state = CONNECTION_HANDLE_STATE_FLOWING;
-	ch->remain_bytes = ch->pf->bytes;
-	post_write_flowing(ch);
+	start_flowing(ch);
 }
 
 
@@ -482,6 +511,7 @@ static void process_connection_handle_interval(struct connection_handle *ch,
 					       struct io_uring_cqe *cqe)
 {
 	assert(e->type == EVENT_TYPE_TIMEOUT);
+	ch->state = CONNECTION_HANDLE_STATE_DONE;
 	close_connection_handle(ch);
 }
 
