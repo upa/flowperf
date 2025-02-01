@@ -32,7 +32,6 @@ static void usage()
 		"                    BUF_SIZE x NR_BUFS memory regions are registered\n"
 		"                    to io_uring via io_uring_register_buf_ring()\n"
 		"\n"
-		"\n"
 		"  Client mode options\n"
 		"    -n NUMBER       number of flows to be done, default 0 (inifinit)\n"
 		"    -t DURATION     test duration (sec), default 10, 0 means inifnite\n"
