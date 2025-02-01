@@ -13,6 +13,7 @@
 
 #include <flowperf.h>
 #include <server.h>
+#include <event.h>
 #include <util.h>
 
 
@@ -41,7 +42,10 @@ struct client_handle {
 
 	/* state and uring event type */
 	int 	state;
-	int	event;
+	struct io_event e_accept;
+	struct io_event e_write;
+	struct io_event e_recv;
+	struct io_event e_cancel;
 
 	/* fields for an RPC transaction */
 	char	msg_buf[MSG_BUF_SZ];
@@ -152,58 +156,39 @@ static int init_serv_io_uring()
 
 /* client handle processing */
 
-static void put_accept_multishot(void)
+static void release_client_handle(struct client_handle *ch)
 {
-	struct io_uring_sqe *sqe = io_uring_get_sqe_always(ring);
-	static struct client_handle ch = {}; /* handle just for accept() */
-
-	pr_debug("put accept() multishot");
-
-	ch.state = CLIENT_HANDLE_STATE_ACCEPTING;
-	ch.event = EVENT_TYPE_ACCEPT;
-	ch.addrlen = sizeof(ch.addr);
-
-	io_uring_prep_multishot_accept(sqe, serv.sock,
-				       (struct sockaddr *)&ch.addr, &ch.addrlen, 0);
-	io_uring_sqe_set_data(sqe, &ch);
+	if (io_event_is_posted(&ch->e_recv) ||
+	    io_event_is_posted(&ch->e_write) ||
+	    io_event_is_posted(&ch->e_cancel)) {
+		pr_debug("%s: there is a posted io, defer releaseing handle",
+			 ch->addrstr);
+		return;
+	}
+	pr_debug("%s: release connection", ch->addrstr);
+	close(ch->sock);
+	free(ch);
 }
-
-static void put_write(struct client_handle *ch, size_t len)
-{
-	struct io_uring_sqe *sqe = io_uring_get_sqe_always(ring);
-	ch->event = EVENT_TYPE_WRITE;
-	io_uring_prep_write(sqe, ch->sock, ch->msg_buf, len, 0);
-	io_uring_sqe_set_data(sqe, ch);
-}
-
-static void put_recv_multishot(struct client_handle *ch)
-{               
-        struct io_uring_sqe *sqe = io_uring_get_sqe_always(ring);
-        ch->event = EVENT_TYPE_RECV;
-        io_uring_prep_recv_multishot(sqe, ch->sock, NULL, 0, 0);
-        sqe->flags |= IOSQE_BUFFER_SELECT;
-        sqe->buf_group = 0;
-        io_uring_sqe_set_data(sqe, ch);
-}               
 
 static void close_client_handle(struct client_handle *ch)
 {
-	struct io_uring_sqe *sqe = io_uring_get_sqe_always(ring);
-
-	/* cancel recv multishot and set state CLOSING. */
-	pr_debug("%s: cancel recv multishot for fd=%d", ch->addrstr, ch->sock);
 	ch->state = CLIENT_HANDLE_STATE_CLOSING;
-	ch->event = EVENT_TYPE_CANCEL;
-	io_uring_prep_cancel_fd(sqe, ch->sock, 0);
-	io_uring_sqe_set_data(sqe, ch);
+
+	if (io_event_is_posted(&ch->e_recv)) {
+		/* cancel recv multishot and set state CLOSING. */
+		pr_debug("%s: cancel recv multishot for fd=%d", ch->addrstr, ch->sock);
+		post_cancel(ring, &ch->e_cancel, ch->sock);
+	} else
+		release_client_handle(ch);
 }
 
 static void process_client_handle_accepting(struct client_handle *ch_accept,
+					    struct io_event *e,
 					    struct io_uring_cqe *cqe)
 {
 	struct client_handle *ch;
 
-	assert(ch_accept->event == EVENT_TYPE_ACCEPT);
+	assert(e->type == EVENT_TYPE_ACCEPT);
 
 	/* multishot accept() returns a new socket. allocate a new
 	 * client_handle, and put recv_multishot for this client.
@@ -218,6 +203,10 @@ static void process_client_handle_accepting(struct client_handle *ch_accept,
 		return;
 	}
 	memset(ch, 0, sizeof(*ch));
+	io_event_init(&ch->e_accept, EVENT_TYPE_ACCEPT, ch);
+	io_event_init(&ch->e_recv, EVENT_TYPE_RECV, ch);
+	io_event_init(&ch->e_write, EVENT_TYPE_WRITE, ch);
+	io_event_init(&ch->e_cancel, EVENT_TYPE_CANCEL, ch);
 
 	ch->sock = cqe->res;
 	ch->addrlen = sizeof(ch->addr);
@@ -233,11 +222,11 @@ static void process_client_handle_accepting(struct client_handle *ch_accept,
 		pr_warn("%s: setoskcopt(TCP_NODELAY): %s", ch->addrstr, strerror(errno));
 
 	ch->state = CLIENT_HANDLE_STATE_ACCEPTED;
-	ch->event = EVENT_TYPE_RECV;
-	put_recv_multishot(ch);
+	post_recv_multishot(ring, &ch->e_recv, ch->sock, 0);
 }
 
 static void process_client_handle_accepted(struct client_handle *ch,
+					   struct io_event *e,
 					   struct io_uring_cqe *cqe)
 {
 	int buf_id;
@@ -247,32 +236,17 @@ static void process_client_handle_accepted(struct client_handle *ch,
 	if (cqe->res <= 0) {
 		if (cqe->res < 0)
 			pr_warn("%s: %s: %s, close connection",
-				ch->addrstr, event_type_name(ch->event),
-				strerror(-cqe->res));
+				ch->addrstr, io_event_name(e), strerror(-cqe->res));
 		else
 			pr_info("%s: %s: close connection",
-				ch->addrstr, event_type_name(ch->event));
+				ch->addrstr, io_event_name(e));
 		goto close;
-		/* XXX: when a client closes socket, recv multishot
-		 * returns 0 and is stoped. So no need to cancel the
-		 * recv multishot.
-		 */
 	}
 
-	switch (ch->event) {
+	switch (e->type) {
 	case EVENT_TYPE_WRITE:
-		/* tcp_info_string or ack was written. no need to do */
-		ch->event = EVENT_TYPE_RECV;
-		if (!(cqe->flags & IORING_CQE_F_BUFFER))
-			break;
-
-		/* fall through:
-		 *
-		 * If IORING_CQE_F_BUFFER is set on cqe->flaags, this
-		 * CQE is (unintendedly) for recv multishot. We need
-		 * to release the buffer.
-		 */
-		pr_warn("event type is WIRTE, but IORING_CQE_F_BUFFER is set");
+		/* tcp_info_string or ack was written. nothing to do */
+		break;
 
 	case EVENT_TYPE_RECV:
 		buf_id = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
@@ -282,13 +256,13 @@ static void process_client_handle_accepted(struct client_handle *ch,
 			/* send ack */
 			pr_debug("%s: send ACK", ch->addrstr);
 			ch->msg_buf[0] = RPC_TAIL_MARK_ACK;
-			put_write(ch, 1);
+			post_write(ring, &ch->e_write, ch->sock, ch->msg_buf, 1);
 			break;
 		case RPC_TAIL_MARK_TCP_INFO:
 			/* send tcp_info */
 			pr_debug("%s: send TCP_INFO", ch->addrstr);
 			ret = build_tcp_info_string(ch->sock, ch->msg_buf, MSG_BUF_SZ);
-			put_write(ch, ret);
+			post_write(ring, &ch->e_write, ch->sock, ch->msg_buf, ret);
 			break;
 		}
 
@@ -300,7 +274,7 @@ static void process_client_handle_accepted(struct client_handle *ch,
 		break;
 
 	default:
-		pr_err("invalid event type %d", ch->event);
+		pr_err("invalid event type %d", e->type);
 		goto close;
 	}
 
@@ -314,39 +288,23 @@ close:
 
 static void server_process_cqe(struct io_uring_cqe *cqe) 
 {
-	struct client_handle *ch = io_uring_cqe_get_data(cqe);
+	struct io_event *e = io_uring_cqe_get_data(cqe);
+	struct client_handle *ch = io_event_data(e);
 
-	if (cqe->res == -ECANCELED) {
-		/* canceled recv multishot may raises -ECANCEL cqe */
-		return;
-	}
+	if (!(cqe->flags & IORING_CQE_F_MORE))
+		io_event_ack(e);
 
 	switch (ch->state) {
 	case CLIENT_HANDLE_STATE_ACCEPTING:
-		process_client_handle_accepting(ch, cqe);
+		process_client_handle_accepting(ch, e, cqe);
 		break;
 
 	case CLIENT_HANDLE_STATE_ACCEPTED:
-		process_client_handle_accepted(ch, cqe);
+		process_client_handle_accepted(ch, e, cqe);
 		break;
 
 	case CLIENT_HANDLE_STATE_CLOSING:
-		if (cqe->res > 0) {
-			/* XXX: When a client close a socket, recv
-			 * multishot returns 0 before write() for ACK
-			 * returns a cqe. Skip such deferred write
-			 * completion. This is a work around. We need
-			 * more sphisticated async syscall
-			 * hannldling...
-			 */
-			pr_info("cancelling connection returns cqe->res=%d (> 0). "
-				"I know this is bad code",
-				cqe->res);
-			break;
-		}
-		pr_debug("%s: release connection", ch->addrstr);
-		close(ch->sock);
-		free(ch);
+		release_client_handle(ch);
 		break;
 
 	default:
@@ -357,11 +315,15 @@ static void server_process_cqe(struct io_uring_cqe *cqe)
 
 static int server_loop(void)
 {
+	static struct client_handle accept_ch = {};
 	struct io_uring_cqe *cqes[MAX_BATCH_SZ];
 	unsigned nr_cqes, i;
 	int ret;
 
-	put_accept_multishot();
+	/* accept_ch is just for accet() */
+	accept_ch.state = CLIENT_HANDLE_STATE_ACCEPTING;
+	io_event_init(&accept_ch.e_accept, EVENT_TYPE_ACCEPT, &accept_ch);
+	post_accept_multishot(ring, &accept_ch.e_accept, serv.sock);
 	if ((ret = io_uring_submit(ring)) < 0) {
 		pr_err("io_uring_submit: %s", strerror(-ret));
 		return -1;

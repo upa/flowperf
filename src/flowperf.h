@@ -88,25 +88,6 @@ inline static char connection_handle_state_name(int state)
 }
 
 
-#define EVENT_TYPE_ACCEPT	0
-#define EVENT_TYPE_CONNECT	1
-#define EVENT_TYPE_READ		2
-#define EVENT_TYPE_WRITE	3
-#define EVENT_TYPE_SEND		4
-#define EVENT_TYPE_RECV		5
-#define EVENT_TYPE_TIMEOUT	6
-#define EVENT_TYPE_CANCEL	7
-
-inline static const char *event_type_name(int type)
-{
-	static const char *type_names[] = {
-		"accept", "connect", "read", "write",
-		"send", "recv",
-		"timeout", "cancel"
-	};
-	return type_names[type];
-}
-
 
 /* RPC Request Format. */
 #define RPC_REQ_START_FLOW	"F"

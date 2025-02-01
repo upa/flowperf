@@ -5,7 +5,8 @@ project(flowperf
 	LANGUAGES C)
 
 add_executable(flowperf
-	src/main.c src/server.c src/client.c src/prob.c src/print.c src/util.c)
+	src/main.c src/server.c src/client.c src/prob.c src/event.c 
+	src/print.c src/util.c)
 target_include_directories(flowperf
 	PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(flowperf uring)

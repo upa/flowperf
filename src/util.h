@@ -10,14 +10,6 @@
 #define array_size(a) (sizeof(a) / sizeof(a[0]))
 
 
-# define likely(x)	__builtin_expect(!!(x), 1)
-# define unlikely(x)	__builtin_expect(!!(x), 0)
-
-
-/* check one sqe exists before get sqe */
-struct io_uring_sqe *io_uring_get_sqe_always(struct io_uring *ring);
-
-
 /* convert sockaddr to ADDR:PORT string onto buf */
 void sockaddr_ntop(struct sockaddr_storage *ss, char *buf, socklen_t size);
 char *sockaddr_ntoa(struct sockaddr_storage *ss);

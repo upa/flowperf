@@ -14,6 +14,7 @@
 #include <flowperf.h>
 #include <client.h>
 #include <util.h>
+#include <event.h>
 
 /* strcture representing flowperf client process */
 struct client {
@@ -176,9 +177,12 @@ struct connection_handle {
 	prob_flow_t *pf;
 	prob_interval_t *pi;
 
-	/* state and uring event type */
-	int	state;
-	int 	event;
+	/* state and uring event handlers */
+	int		state;
+	struct io_event e_connect;
+	struct io_event e_write;
+	struct io_event e_read;
+	struct io_event e_timeout;
 
 	/* fileds for an RPC transaction */
 	char msg_buf[MSG_BUF_SZ];
@@ -193,8 +197,6 @@ struct connection_handle {
 	/* tcp_info */
 	char tcp_info_s[TCP_INFO_STRLEN];
 	char tcp_info_c[TCP_INFO_STRLEN];
-
-
 };
 
 
@@ -268,7 +270,7 @@ static void print_result(FILE *fp)
 }
 
 
-static int put_connect(void)
+static int post_new_connect(void)
 {
 	struct connection_handle *ch;
 	struct io_uring_sqe *sqe;
@@ -296,6 +298,12 @@ static int put_connect(void)
 	}
 	memset(ch->send_buf, '!', cli.o->buf_sz);
 
+	ch->state = CONNECTION_HANDLE_STATE_CONNECTING;
+	io_event_init(&ch->e_connect, EVENT_TYPE_CONNECT, ch);
+	io_event_init(&ch->e_write, EVENT_TYPE_WRITE, ch);
+	io_event_init(&ch->e_read, EVENT_TYPE_READ, ch);
+	io_event_init(&ch->e_timeout, EVENT_TYPE_TIMEOUT, ch);
+
 	ch->pa = prob_list_pickup_data_uniformly(cli.o->addrs);
 	ch->pf = prob_list_pickup_data_uniformly(cli.o->flows);
 	ch->pi = prob_list_is_empty(cli.o->intervals) ?
@@ -312,27 +320,16 @@ static int put_connect(void)
 		return -1;
 	}
 
-	sqe = io_uring_get_sqe_always(ring);
-	ch->state = CONNECTION_HANDLE_STATE_CONNECTING;
-	ch->event = EVENT_TYPE_CONNECT;
-	io_uring_prep_connect(sqe, ch->sock, (struct sockaddr *)&pa->saddr, pa->salen);
-	io_uring_sqe_set_data(sqe, ch);
-
+	post_connect(ring, &ch->e_connect, ch->sock,
+		     (struct sockaddr *)&pa->saddr, pa->salen);
 	connection_handle_append(ch);
 	tsq_append(&ch->ts_start);
 
 	return 0;
 }
 
-static void put_write(struct connection_handle *ch, char *buf, size_t len)
-{
-	struct io_uring_sqe *sqe = io_uring_get_sqe_always(ring);
-	ch->event = EVENT_TYPE_WRITE;
-	io_uring_prep_write(sqe, ch->sock, buf, len, 0);
-	io_uring_sqe_set_data(sqe, ch);
-}
 
-static void put_write_flowing(struct connection_handle *ch)
+static void post_write_flowing(struct connection_handle *ch)
 {
 	size_t send_sz = min(ch->remain_bytes, cli.o->buf_sz);
 
@@ -347,35 +344,20 @@ static void put_write_flowing(struct connection_handle *ch)
 			ch->send_buf[send_sz - 1] = RPC_TAIL_MARK_END;
 	}
 
-	put_write(ch, ch->send_buf, send_sz);
+	post_write(ring, &ch->e_write, ch->sock, ch->send_buf, send_sz);
 }
 
-static void put_read(struct connection_handle *ch, char *buf, size_t len)
-{
-	struct io_uring_sqe *sqe = io_uring_get_sqe_always(ring);
-	ch->event = EVENT_TYPE_READ;
-	io_uring_prep_read(sqe, ch->sock, buf, len, 0);
-	io_uring_sqe_set_data(sqe, ch);
-}
-
-static void put_timeout(struct connection_handle *ch)
-{
-	struct io_uring_sqe *sqe = io_uring_get_sqe_always(ring);
-	struct __kernel_timespec intval;
-
-	pr_debug("%s: sleep %lu nsec", ch->pa->addrstr, ch->pi->interval);
-
-	intval.tv_sec = 0;
-	intval.tv_nsec = ch->pi->interval;
-
-	ch->state = CONNECTION_HANDLE_STATE_INTERVAL;
-	ch->event = EVENT_TYPE_TIMEOUT;
-	io_uring_prep_timeout(sqe, &intval, 0, 0);
-	io_uring_sqe_set_data(sqe, ch);
-}
 
 static void close_connection_handle(struct connection_handle *ch)
 {
+	if (io_event_is_posted(&ch->e_write) ||
+	    io_event_is_posted(&ch->e_connect) ||
+	    io_event_is_posted(&ch->e_read) ||
+	    io_event_is_posted(&ch->e_timeout)) {
+		/* still there is a posted io. defer closing */
+		return;
+	}
+
 	pr_debug("%s: close connection", ch->pa->addrstr);
 
 	close(ch->sock);
@@ -397,15 +379,16 @@ static void close_connection_handle(struct connection_handle *ch)
 	 *  or failed. Then, put a new connect() to start the next
 	 *  RPC.
 	 */
-	put_connect();
+	post_new_connect();
 }
 
 static void process_connection_handle_connecting(struct connection_handle *ch,
+						 struct io_event *e,
 						 struct io_uring_cqe *cqe)
 {
-	if (ch->event != EVENT_TYPE_CONNECT) {
+	if (e->type != EVENT_TYPE_CONNECT) {
 		pr_err("invalid state/event pair: state=%d event=%d",
-		       ch->state, ch->event);
+		       ch->state, e->type);
 		close_connection_handle(ch);
 		return;
 	}
@@ -423,16 +406,17 @@ static void process_connection_handle_connecting(struct connection_handle *ch,
 
 	ch->state = CONNECTION_HANDLE_STATE_FLOWING;
 	ch->remain_bytes = ch->pf->bytes;
-	put_write_flowing(ch);
+	post_write_flowing(ch);
 }
 
 
 static void process_connection_handle_flowing(struct connection_handle *ch,
+					      struct io_event *e,
 					      struct io_uring_cqe *cqe)
 {
-	if (ch->event != EVENT_TYPE_WRITE) {
+	if (e->type != EVENT_TYPE_WRITE) {
 		pr_err("invalid state/event pair: state=%d event=%d",
-		       ch->state, ch->event);
+		       ch->state, e->type);
 		close_connection_handle(ch);
 		return;
 	}
@@ -452,24 +436,26 @@ static void process_connection_handle_flowing(struct connection_handle *ch,
 		ch->state = CONNECTION_HANDLE_STATE_WAIT_ACK;
 		if (cli.o->server_tcp_info) {
 			memset(ch->tcp_info_s, 0, TCP_INFO_STRLEN);
-			put_read(ch, ch->tcp_info_s, TCP_INFO_STRLEN);
+			post_read(ring, &ch->e_read,
+				  ch->sock, ch->tcp_info_s, TCP_INFO_STRLEN);
 		} else {
 			memset(ch->msg_buf, 0, MSG_BUF_SZ);
-			put_read(ch, ch->msg_buf, MSG_BUF_SZ);
+			post_read(ring, &ch->e_read, ch->sock, ch->msg_buf, MSG_BUF_SZ);
 		}
 		return;
 	}
 
 	/* we need to send more bytes */
-	put_write_flowing(ch);
+	post_write_flowing(ch);
 }
 
 static void process_connection_handle_wait_ack(struct connection_handle *ch,
+					       struct io_event *e,
 					       struct io_uring_cqe *cqe)
 {
-	if (ch->event != EVENT_TYPE_READ) {
+	if (e->type != EVENT_TYPE_READ) {
 		pr_err("invalid state/event pair: state=%d event=%d",
-		       ch->state, ch->event);
+		       ch->state, e->type);
 		goto close;
 	}
 
@@ -492,7 +478,7 @@ static void process_connection_handle_wait_ack(struct connection_handle *ch,
 
 	if (ch->pi) {
 		/* sleep interval */
-		put_timeout(ch);
+		post_timeout(ring, &ch->e_timeout, ch->pi->interval);
 		return;
 	}
 
@@ -503,31 +489,33 @@ close:
 }
 
 static void process_connection_handle_interval(struct connection_handle *ch,
+					       struct io_event *e,
 					       struct io_uring_cqe *cqe)
 {
-	if (ch->event != EVENT_TYPE_TIMEOUT) {
+	if (e->type != EVENT_TYPE_TIMEOUT) {
 		pr_err("invalid state/event pair: state=%d event=%d",
-		       ch->state, ch->event);
+		       ch->state, e->type);
 	}
 	close_connection_handle(ch);
 }
 
 static void client_process_cqe(struct io_uring_cqe *cqe)
 {
-	struct connection_handle *ch = io_uring_cqe_get_data(cqe);
+	struct io_event *e = io_uring_cqe_get_data(cqe);
+	struct connection_handle *ch = io_event_ack_and_data(e);
 
 	switch (ch->state) {
 	case CONNECTION_HANDLE_STATE_CONNECTING:
-		process_connection_handle_connecting(ch, cqe);
+		process_connection_handle_connecting(ch, e, cqe);
 		break;
 	case CONNECTION_HANDLE_STATE_FLOWING:
-		process_connection_handle_flowing(ch, cqe);
+		process_connection_handle_flowing(ch, e, cqe);
 		break;
 	case CONNECTION_HANDLE_STATE_WAIT_ACK:
-		process_connection_handle_wait_ack(ch, cqe);
+		process_connection_handle_wait_ack(ch, e, cqe);
 		break;
 	case CONNECTION_HANDLE_STATE_INTERVAL:
-		process_connection_handle_interval(ch, cqe);
+		process_connection_handle_interval(ch, e, cqe);
 		break;
 	default:
 		pr_err("invalid connection handle state: %d", ch->state);
@@ -544,7 +532,7 @@ static int client_loop(void)
 	pr_info("put %d connect() events", cli.o->concurrency);
 	tsq_zerorize();
 	for (i = 0; i < cli.o->concurrency; i++) {
-		if (put_connect() < 0)
+		if (post_new_connect() < 0)
 			return -1;
 	}
 	tsq_bulk_get_time();
