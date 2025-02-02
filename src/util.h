@@ -34,16 +34,17 @@ void start_running(void);
 void stop_running(void);
 bool is_running(void);
 
-/* stack for socket cache */
-typedef struct int_stack_struct {
-	int *stack;
+
+/* stack of u64, for caching socket fds and pointers of send_buf */
+typedef struct u64_stack_struct {
+	__u64 *stack;
 	size_t size;	/* size of this stack */
 	size_t len;	/* current length (number of pusehd integers )*/
-} int_stack_t;
+} u64_stack_t;
 
-int_stack_t *int_stack_alloc(size_t size);
-size_t int_stack_len(int_stack_t *stack);
-void int_stack_push(int_stack_t *stack, int v);
-int int_stack_pop(int_stack_t *stack);
+u64_stack_t *u64_stack_alloc(size_t size);
+size_t u64_stack_len(u64_stack_t *stack);
+void u64_stack_push(u64_stack_t *stack, __u64 v);
+__u64 u64_stack_pop(u64_stack_t *stack);
 
 #endif

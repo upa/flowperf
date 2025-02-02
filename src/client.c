@@ -28,6 +28,8 @@ struct client {
 
 	struct timespec start_time;
 
+	u64_stack_t	*send_buf_cache;
+
 	struct io_uring ring;
 };
 
@@ -47,7 +49,7 @@ typedef struct prob_addr_struct {
 	int 		protocol;
 	char 		addrstr[ADDRSTRLEN];
 
-	int_stack_t	*sock_cache;
+	u64_stack_t	*sock_cache;
 } prob_addr_t;
 
 /* o->flows->probs[n].data */
@@ -96,8 +98,8 @@ static int prob_list_iter_addr(prob_t *prob)
 	freeaddrinfo(res);
 
 	if (cli.o->cache_sockets) {
-		if ((pa->sock_cache = int_stack_alloc(cli.o->concurrency)) == NULL) {
-			pr_err("int_stack_alloc: %s", strerror(errno));
+		if ((pa->sock_cache = u64_stack_alloc(cli.o->concurrency)) == NULL) {
+			pr_err("u64_stack_alloc: %s", strerror(errno));
 			return -1;
 		}
 	}
@@ -327,7 +329,10 @@ static int post_new_connect(void)
 	}
 	memset(ch, 0, sizeof(*ch));
 
-	if ((ch->send_buf = malloc(cli.o->buf_sz)) == NULL) {
+	if (u64_stack_len(cli.send_buf_cache) > 0) {
+		/* reuse a cached send_buf */
+		ch->send_buf = (void *)(uintptr_t) u64_stack_pop(cli.send_buf_cache);
+	} else if ((ch->send_buf = malloc(cli.o->buf_sz)) == NULL) {
 		pr_err("malloc: %s", strerror(errno));
 		return -1;
 	}
@@ -346,10 +351,10 @@ static int post_new_connect(void)
 
 	prob_addr_t *pa = ch->pa;
 
-	if (pa->sock_cache && int_stack_len(pa->sock_cache) > 0) {
+	if (pa->sock_cache && u64_stack_len(pa->sock_cache) > 0) {
 		/* use a cached socket if exists */
-		pr_debug("%s: reuse cached socket", pa->addrstr);
-		ch->sock = int_stack_pop(pa->sock_cache);
+		pr_debug("%s: reuse a cached socket", pa->addrstr);
+		ch->sock = u64_stack_pop(pa->sock_cache);
 		connection_handle_append(ch);
 		start_flowing(ch);
 		return 0;
@@ -387,14 +392,14 @@ static void close_connection_handle(struct connection_handle *ch)
 	}
 
 	if (ch->pa->sock_cache && ch->state == CONNECTION_HANDLE_STATE_DONE) {
-		pr_debug("%s: cache socket for reuse connection", ch->pa->addrstr);
-		int_stack_push(ch->pa->sock_cache, ch->sock);
+		pr_debug("%s: cache the connection", ch->pa->addrstr);
+		u64_stack_push(ch->pa->sock_cache, ch->sock);
 	} else {
 		pr_debug("%s: close connection", ch->pa->addrstr);
 		close(ch->sock);
 	}
 
-	free(ch->send_buf);
+	u64_stack_push(cli.send_buf_cache, (unsigned long)ch->send_buf);
 	ch->send_buf = NULL;
 
 	if (cli.o->nr_flows) {
@@ -624,6 +629,11 @@ int start_client(struct opts *o)
 
 	memset(&cli, 0, sizeof(cli));
 	cli.o = o;
+
+	if ((cli.send_buf_cache = u64_stack_alloc(cli.o->concurrency)) == NULL) {
+		pr_err("u64_stack_alloc: %s", strerror(errno));
+		return -1;
+	}
 
 	if (prob_list_iterate(o->addrs, prob_list_iter_addr) < 0)
 		return -1;

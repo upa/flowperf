@@ -101,15 +101,15 @@ bool is_running(void)
 }
 
 
-/* stack of integer, for socket cache */
-int_stack_t *int_stack_alloc(size_t size)
+/* stack of u64, for caching socket fds and pointers of send_buf */
+u64_stack_t *u64_stack_alloc(size_t size)
 {
-	int_stack_t *stack;
+	u64_stack_t *stack;
 
 	if ((stack = malloc(sizeof(*stack))) == NULL)
 		return NULL;
 
-	if ((stack->stack = calloc(size, sizeof(int))) == NULL) {
+	if ((stack->stack = calloc(size, sizeof(__u64))) == NULL) {
 		free(stack);
 		return NULL;
 	}
@@ -119,18 +119,18 @@ int_stack_t *int_stack_alloc(size_t size)
 	return stack;
 }
 
-size_t int_stack_len(int_stack_t *stack)
+size_t u64_stack_len(u64_stack_t *stack)
 {
 	return stack->len;
 }
 
-void int_stack_push(int_stack_t *stack, int v)
+void u64_stack_push(u64_stack_t *stack, __u64 v)
 {
 	assert(stack->len < stack->size);
 	stack->stack[stack->len++] = v;
 }
 
-int int_stack_pop(int_stack_t *stack)
+__u64 u64_stack_pop(u64_stack_t *stack)
 {
 	assert(stack->len > 0);
 	return stack->stack[--stack->len];
