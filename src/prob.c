@@ -31,8 +31,8 @@ int prob_list_append(prob_list_t *list, double prob_value, const char *key)
 {
 	prob_t *prob;
 
-	if (prob_value < 0) {
-		pr_err("probability must be greater or equal to 0: %s %f",
+	if (prob_value <= 0) {
+		pr_err("probability must be greater than 0: key=%s prob=%f",
 		       key, prob_value);
 		return -1;
 	}

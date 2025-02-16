@@ -12,6 +12,8 @@ def parse_and_print(distfile:TextIO, size_factor:int):
         if len(s) == 1:
             continue # the first line is the average size of messages
         size, cdf = map(float, s)
+        if cdf == 0:
+            continue
         cdfs.append((size * size_factor, cdf))
 
     pdfs = [cdfs[0]]
