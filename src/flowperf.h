@@ -89,28 +89,15 @@ inline static char connection_handle_state_name(int state)
 
 
 
-/* RPC Request Format. */
-#define RPC_REQ_START_FLOW	"F"
-/* "F [FLOW_SIZE]"
+/* RPC TAIL Marker:
  *
- * Server returns FLOW_SIZE bytes
+ * The last byte of a flow from client must be 'E' or 'T' that
+ * indicates the flow is completed. If the last byte is 'E', the
+ * server respond with sending 'A' as an ACK. If the last byte is 'T',
+ * the server sneds tcp info string as an ACK.
  */
-
-#define RPC_REQ_TCP_INFO	"T"
-/* "T"
- *
- * Server returns tcp_info in "key=value key=value ...\n" string.
- * The string is terminated by '\n'
- */
-
-#define RPC_REP_INVALID		"I"	/* I */
-/* "I"
- *
- * Server returns 'I' if RPC REQ is invalid.
- */
-
 #define RPC_TAIL_MARK_END	'E'
-#define RPC_TAIL_MARK_ACK	'A'
 #define RPC_TAIL_MARK_TCP_INFO	'T'
+#define RPC_TAIL_MARK_ACK	'A'
 
 #endif /* _FLOWPERF_H_ */
