@@ -112,6 +112,6 @@ $ flowperf -c -d 10.0.0.1 -F google-all
 `-F` option specifies a text file that contains flow size and weight
 pairs, formatted as `FLOW_SIZE WEIGHT` per line. If the specified file
 does not exist, `-F` option searches for it in
-`/usr/local/share/flowperf/examples/[VALUE].txt`. `make install` puts
+`/usr/local/share/flowperf/examples`. `make install` puts
 `google-all`, `google-search`, `fb-hadoop`, `fb-memcache`, and `dctcp`
 in this directory.
