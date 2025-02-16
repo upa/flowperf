@@ -648,22 +648,22 @@ int start_client(struct opts *o)
 	prob_list_convert_to_cdf(o->flows);
 	prob_list_convert_to_cdf(o->intervals);
 
-	pr_debug("destinations and probability (cumulative and normalized):");
-	prob_list_dump_debug(o->addrs);
+	pr_info("destinations and probability (cumulative and normalized):");
+	prob_list_dump_info(o->addrs);
 	if (prob_list_is_empty(o->addrs)) {
 		pr_err("no destination address provided");
 		return -1;
 	}
 
-	pr_debug("flow sizes and probability (cumulative and normalized):");
-	prob_list_dump_debug(o->flows);
+	pr_info("flow sizes and probability (cumulative and normalized):");
+	prob_list_dump_info(o->flows);
 	if (prob_list_is_empty(o->flows)) {
 		pr_err("no flow size provided");
 		return -1;
 	}
 
-	pr_debug("intervals and probability (cumulative and normalized):");
-	prob_list_dump_debug(o->intervals);
+	pr_info("intervals and probability (cumulative and normalized):");
+	prob_list_dump_info(o->intervals);
 
 	if (init_client_io_uring() < 0)
 		return -1;

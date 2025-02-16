@@ -60,6 +60,6 @@ void *prob_list_pickup_data(prob_list_t *list, double needle);
 	prob_list_pickup_data(list, (double)rand() / RAND_MAX)
 
 
-void prob_list_dump_debug(prob_list_t *list);
+void prob_list_dump_info(prob_list_t *list);
 
 #endif /* _PROB_H_ */

@@ -155,12 +155,12 @@ void *prob_list_pickup_data(prob_list_t *list, double needle)
 	return prob->data;
 }
 
-void prob_list_dump_debug(prob_list_t *list)
+void prob_list_dump_info(prob_list_t *list)
 {
 	prob_t *prob;
-	if (get_print_severity() >= SEVERITY_DEBUG) {
+	if (get_print_severity() >= SEVERITY_INFO) {
 		foreach_prob(list, prob) {
-			pr_debug("%s\t%f", prob->key, prob->probability);
+			pr_info("%s\t%f", prob->key, prob->probability);
 		}
 	}
 }

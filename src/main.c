@@ -35,20 +35,22 @@ static void usage()
 		"  Client mode options\n"
 		"    -n NUMBER       number of flows to be done, default 0 (inifinit)\n"
 		"    -t DURATION     test duration (sec), default 10, 0 means inifnite\n"
-		"    -x CONCURRENCY  number of cunccurent flows\n"
+		"    -x CONCURRENCY  number of cunccurent flows, default 1\n"
 		"    -T              get tcp_info from the server side for each flow\n"
 		"\n"
 		"    -R RANDOM_SEED  set random seed\n"
 		"    -C              cache and reuse TCP connections\n"
 		"\n"
-		"    -d ADDR:PROB    dest address and its probability\n"
-		"    -D ADDR_TXT     txt file contains 'ADDR PROBABLITY' per line\n"
+		"    -d ADDR@WEIGHT    dest address and its probability\n"
+		"    -D ADDR_TXT       txt contains 'ADDR WEIGHT' per line\n"
 		"\n"
-		"    -f FLOW_SZ:PROB flow size (byte) and its probablity\n"
-		"    -F FLOW_TXT     txt file contains 'FLOWSIZE PROBABILITY' per line\n"
+		"    -f FLOW_SZ@WEIGHT flow size (byte) and its probablity\n"
+		"    -F FLOW_TXT       txt contains 'FLOWSIZE WEIGHT' per line\n"
 		"\n"
-		"    -i INTVAL:PROB  interval (nsec) and its probablity\n"
-		"    -I INTVAL_TXT   txt file contains 'INTERVAL PROBABLITY' per line\n"
+		"    -i INTVAL@WEIGHT  interval (nsec) and its probablity\n"
+		"    -I INTVAL_TXT     txt contains 'INTERVAL WEIGHT' per line\n"
+		"\n"
+		"    When @ does not exist on -d/-f/-i values, weight is set to 1."
 		"\n\n",
 		DEFAULT_BUF_SZ / 1024,
 		DEFAULT_NR_BUFS);
@@ -59,6 +61,7 @@ static char _default_local_addr[] = DEFAULT_LOCAL_ADDR;
 
 static int parse_args(int argc, char **argv, struct opts *o)
 {
+	double p;
 	char *c;
 	int ch;
 
@@ -175,13 +178,15 @@ static int parse_args(int argc, char **argv, struct opts *o)
 			break;
 
 		case 'd':
-			c = strrchr(optarg, ':');
-			if (!c) {
-				pr_err("invalid addr:prob format: %s", optarg);
-				return -1;
+			c = strrchr(optarg, '@');
+			if (c) {
+				*c = '\0';
+				p = atof(c+1);
+			} else {
+				pr_info("no @ in '%s', set 1", optarg);
+				p = 1;
 			}
-			*c = '\0';
-			if (prob_list_append(o->addrs, atof(c+1), optarg) < 0)
+			if (prob_list_append(o->addrs, p, optarg) < 0)
 				return -1;
 			break;
 		case 'D':
@@ -190,13 +195,15 @@ static int parse_args(int argc, char **argv, struct opts *o)
 			break;
 
 		case 'f':
-			c = strrchr(optarg, ':');
-			if (!c) {
-				pr_err("invalid flow:prob format: %s", optarg);
-				return -1;
+			c = strrchr(optarg, '@');
+			if (c) {
+				*c = '\0';
+				p = atof(c+1);
+			} else  {
+				pr_info("no @ in '%s', set 1", optarg);
+				p = 1;
 			}
-			*c = '\0';
-			if (prob_list_append(o->flows, atof(c+1), optarg) < 0)
+			if (prob_list_append(o->flows, p, optarg) < 0)
 				return -1;
 			break;
 		case 'F':
@@ -205,13 +212,15 @@ static int parse_args(int argc, char **argv, struct opts *o)
 			break;
 
 		case 'i':
-			c = strrchr(optarg, ':');
-			if (!c) {
-				pr_err("invalid interval:prob format: %s", optarg);
-				return -1;
+			c = strrchr(optarg, '@');
+			if (c) {
+				*c = '\0';
+				p = atof(c+1);
+			} else  {
+				pr_info("no @ in '%s', set 1", optarg);
+				p = 1;
 			}
-			*c = '\0';
-			if (prob_list_append(o->intervals, atof(c+1), optarg) < 0)
+			if (prob_list_append(o->intervals, p, optarg) < 0)
 				return -1;
 			break;
 		case 'I':
