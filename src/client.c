@@ -170,7 +170,7 @@ static void tsq_bulk_get_time()
 	/* save timestamp to appended timespec objects */
 	int i;
 	if (tsq.tail > 0) {
-		clock_gettime(CLOCK_MONOTONIC, tsq.tstamps[0]);
+		clock_gettime(CLOCK_REALTIME, tsq.tstamps[0]);
 		for (i = 1; i < tsq.tail; i++) {
 			*tsq.tstamps[i] = *tsq.tstamps[0];
 		}
@@ -732,7 +732,7 @@ int start_client(struct opts *o)
 	}
 
 
-	clock_gettime(CLOCK_MONOTONIC, &cli.start_time);
+	clock_gettime(CLOCK_REALTIME, &cli.start_time);
 
 	ret = client_loop();
 
