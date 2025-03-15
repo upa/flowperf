@@ -64,6 +64,19 @@ void post_timeout(struct io_uring *ring, struct io_event *e, time_t nsec_abs)
 	e->state = EVENT_STATE_POSTED;
 }
 
+void post_recvmsg(struct io_uring *ring, struct io_event *e, int fd, struct msghdr *msg,
+		  unsigned flags)
+{
+	struct io_uring_sqe *sqe;
+
+	assert_event_state_for_post(e);
+
+	sqe = io_uring_get_sqe_always(ring);
+	io_uring_prep_recvmsg(sqe, fd, msg, flags);
+	io_uring_sqe_set_data(sqe, e);
+	e->state = EVENT_STATE_POSTED;
+}
+
 void post_accept_multishot(struct io_uring *ring, struct io_event *e, int fd)
 {
 	static struct sockaddr_storage ss; /* not used in practice */

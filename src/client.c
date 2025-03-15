@@ -8,6 +8,8 @@
 #include <signal.h>
 #include <assert.h>
 #include <linux/tcp.h>
+#include <linux/net_tstamp.h>
+#include <linux/errqueue.h>
 
 #include <liburing.h>
 
@@ -177,6 +179,7 @@ static void tsq_bulk_get_time()
 
 
 #define MSG_BUF_SZ	32
+#define CMSG_BUF_SZ	CMSG_SPACE(sizeof(struct scm_timestamping))
 
 struct connection_handle {
 	/* a handle for a connection to a server */
@@ -192,12 +195,18 @@ struct connection_handle {
 	int		state;
 	struct io_event e_connect;
 	struct io_event e_write;
-	struct io_event e_read;
+	struct io_event e_recvmsg;
 	struct io_event e_timeout;
 
 	/* fileds for an RPC transaction */
 	char msg_buf[MSG_BUF_SZ];
 	char *send_buf;
+
+	/* msghdr and iov for recvmsg*/
+
+	struct msghdr mh;
+	struct iovec iov;
+	char cmsgbuf[CMSG_BUF_SZ];
 
 	ssize_t	remain_bytes;	/* remaining bytes to be received for flowing */
 
@@ -343,7 +352,7 @@ static int post_new_connect(void)
 	ch->state = CONNECTION_HANDLE_STATE_CONNECTING;
 	io_event_init(&ch->e_connect, EVENT_TYPE_CONNECT, ch);
 	io_event_init(&ch->e_write, EVENT_TYPE_WRITE, ch);
-	io_event_init(&ch->e_read, EVENT_TYPE_READ, ch);
+	io_event_init(&ch->e_recvmsg, EVENT_TYPE_RECVMSG, ch);
 	io_event_init(&ch->e_timeout, EVENT_TYPE_TIMEOUT, ch);
 
 	ch->pa = prob_list_pickup_data_uniformly(cli.o->addrs);
@@ -362,13 +371,19 @@ static int post_new_connect(void)
 		return 0;
 	}
 
-	int v = 1;
 	if ((ch->sock = socket(pa->family, pa->socktype, pa->protocol)) < 0) {
 		pr_err("socket(): %s", strerror(errno));
 		return -1;
 	}
-	if (setsockopt(ch->sock, SOL_TCP, TCP_NODELAY, &v, sizeof(v)) < 0) {
+
+	int val = 1;
+	if (setsockopt(ch->sock, SOL_TCP, TCP_NODELAY, &val, sizeof(val)) < 0) {
 		pr_err("setsockopt(TCP_NODELAY): %s", strerror(errno));
+		return -1;
+	}
+	val = SOF_TIMESTAMPING_SOFTWARE | SOF_TIMESTAMPING_RX_SOFTWARE;
+	if (setsockopt(ch->sock, SOL_SOCKET, SO_TIMESTAMPING, &val, sizeof(val)) < 0) {
+		pr_err("setsockopt(SO_TIEMSTAMPING): %s", strerror(errno));
 		return -1;
 	}
 
@@ -385,7 +400,7 @@ static void close_connection_handle(struct connection_handle *ch)
 {
 	if (io_event_is_posted(&ch->e_write) ||
 	    io_event_is_posted(&ch->e_connect) ||
-	    io_event_is_posted(&ch->e_read) ||
+	    io_event_is_posted(&ch->e_recvmsg) ||
 	    io_event_is_posted(&ch->e_timeout)) {
 		/* still there is a posted io. defer closing */
 		pr_debug("%s: there is unacked io event(s). defer closing connection",
@@ -461,14 +476,24 @@ static void process_connection_handle_flowing(struct connection_handle *ch,
 		 * or tcp_info as ack from the server */
 		build_tcp_info_string(ch->sock, ch->tcp_info_c, TCP_INFO_STRLEN);
 		ch->state = CONNECTION_HANDLE_STATE_WAIT_ACK;
+
 		if (cli.o->server_tcp_info) {
-			memset(ch->tcp_info_s, 0, TCP_INFO_STRLEN);
-			post_read(ring, &ch->e_read,
-				  ch->sock, ch->tcp_info_s, TCP_INFO_STRLEN);
+			ch->iov.iov_base = ch->tcp_info_s;
+			ch->iov.iov_len = TCP_INFO_STRLEN;
 		} else {
-			memset(ch->msg_buf, 0, MSG_BUF_SZ);
-			post_read(ring, &ch->e_read, ch->sock, ch->msg_buf, MSG_BUF_SZ);
+			ch->iov.iov_base = ch->msg_buf;
+			ch->iov.iov_len = MSG_BUF_SZ;
 		}
+		memset(ch->iov.iov_base, 0, ch->iov.iov_len);
+
+		memset(&ch->mh, 0, sizeof(ch->mh));
+		memset(&ch->cmsgbuf, 0, CMSG_BUF_SZ);
+		ch->mh.msg_iov = &ch->iov;
+		ch->mh.msg_iovlen = 1;
+		ch->mh.msg_control = ch->cmsgbuf;
+		ch->mh.msg_controllen = sizeof(ch->cmsgbuf);
+		post_recvmsg(ring, &ch->e_recvmsg, ch->sock, &ch->mh, 0);
+
 		return;
 	}
 
@@ -476,15 +501,35 @@ static void process_connection_handle_flowing(struct connection_handle *ch,
 	post_write_flowing(ch);
 }
 
+static void obtain_flow_end_time(struct connection_handle *ch)
+{
+	/* obtain rx timestamp from cmsg and save it onto
+	 * ch->ts_flow_end. */
+
+	struct cmsghdr *cmsg;
+
+	for (cmsg = CMSG_FIRSTHDR(&ch->mh); cmsg != NULL;
+	     cmsg = CMSG_NXTHDR(&ch->mh, cmsg)) {
+		if (cmsg->cmsg_level == SOL_SOCKET &&
+		    cmsg->cmsg_type == SCM_TIMESTAMPING) {
+			struct scm_timestamping *ts;
+			ts = (struct scm_timestamping *)CMSG_DATA(cmsg);
+			ch->ts_flow_end = ts->ts[0];
+			return;
+		}
+	}
+	pr_warn("failed to get rx timestamsp from recvmsg");
+}
+
 static void process_connection_handle_wait_ack(struct connection_handle *ch,
 					       struct io_event *e,
 					       struct io_uring_cqe *cqe)
 {
-	assert(e->type == EVENT_TYPE_READ);
+	assert(e->type == EVENT_TYPE_RECVMSG);
 
 	if (cqe->res <= 0) {
 		if (cqe->res < 0)
-			pr_warn("%s: read: %s", ch->pa->addrstr, strerror(-cqe->res));
+			pr_warn("%s: recvmsg: %s", ch->pa->addrstr, strerror(-cqe->res));
 		else
 			pr_warn("%s: connection closed", ch->pa->addrstr);
 		goto close;
@@ -497,7 +542,8 @@ static void process_connection_handle_wait_ack(struct connection_handle *ch,
 	}
 
 	pr_debug("%s: %lu bytes flow acked", ch->pa->addrstr, ch->pf->bytes);
-	tsq_append(&ch->ts_flow_end);
+
+	obtain_flow_end_time(ch);
 
 	if (ch->pi) {
 		/* sleep interval */
