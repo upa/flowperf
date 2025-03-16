@@ -148,34 +148,6 @@ static int prob_list_iter_interval(prob_t *prob)
 	return 0;
 }
 
-/* buik timestamp logic */
-struct timespec_q {
-	struct timespec *tstamps[MAX_BATCH_SZ];
-	int tail;
-} tsq;
-
-static void tsq_zerorize()
-{
-	tsq.tail = 0;
-}
-
-static void tsq_append(struct timespec *ts)
-{
-	tsq.tstamps[tsq.tail++] = ts;
-	assert(tsq.tail < MAX_BATCH_SZ);
-}
-
-static void tsq_bulk_get_time()
-{
-	/* save timestamp to appended timespec objects */
-	int i;
-	if (tsq.tail > 0) {
-		clock_gettime(CLOCK_REALTIME, tsq.tstamps[0]);
-		for (i = 1; i < tsq.tail; i++) {
-			*tsq.tstamps[i] = *tsq.tstamps[0];
-		}
-	}
-}
 
 
 #define MSG_BUF_SZ	32
@@ -194,6 +166,7 @@ struct connection_handle {
 	/* state and uring event handlers */
 	int		state;
 	struct io_event e_connect;
+	struct io_event e_sendmsg;
 	struct io_event e_write;
 	struct io_event e_recvmsg;
 	struct io_event e_timeout;
@@ -202,17 +175,17 @@ struct connection_handle {
 	char msg_buf[MSG_BUF_SZ];
 	char *send_buf;
 
-	/* msghdr and iov for recvmsg*/
-
+	/* msghdr and iov for sendmsg() and recvmsg() */
 	struct msghdr mh;
-	struct iovec iov;
+	struct iovec iov[1];
 	char cmsgbuf[CMSG_BUF_SZ];
 
 	ssize_t	remain_bytes;	/* remaining bytes to be received for flowing */
 
-	struct timespec ts_start;	/* tstamp of start time (put connect())*/
-	struct timespec ts_flow_start;	/* tstamp of RPC FLOW sent */
-	struct timespec ts_flow_end;	/* tstamp of RPC FLOW done */
+	struct timespec ts_conn_start;	/* start connect() */
+	struct timespec ts_conn_end;	/* end of connect() */
+	struct timespec ts_flow_start;	/* first packet of the flow sent */
+	struct timespec ts_flow_end;	/* last packet of the flow received */
 
 	/* tcp_info */
 	char tcp_info_s[TCP_INFO_STRLEN];
@@ -257,7 +230,6 @@ void print_connection_handle_result(FILE *fp, struct connection_handle *ch)
 		       "dst=%s "
 		       "flow_size=%lu "
 		       "remain=%lu "
-		       "start=%ld "
 		       "flowstart=%ld "
 		       "flowend=%ld "
 		       "time2conn=%lld "
@@ -267,10 +239,9 @@ void print_connection_handle_result(FILE *fp, struct connection_handle *ch)
 		       ch->pa->addrstr,
 		       ch->pf->bytes,
 		       ch->remain_bytes,
-		       timespec_nsec(&ch->ts_start),
 		       timespec_nsec(&ch->ts_flow_start),
 		       timespec_nsec(&ch->ts_flow_end),
-		       timespec_sub_nsec(&ch->ts_flow_start, &ch->ts_start),
+		       timespec_sub_nsec(&ch->ts_conn_end, &ch->ts_conn_start),
 		       timespec_sub_nsec(&ch->ts_flow_end, &ch->ts_flow_start),
 		       ch->tcp_info_c
 		);
@@ -291,7 +262,7 @@ static void print_result(FILE *fp)
 		print_connection_handle_result(fp, ch);
 }
 
-static void post_write_flowing(struct connection_handle *ch)
+static size_t prep_send_buf(struct connection_handle *ch)
 {
 	size_t send_sz = min(ch->remain_bytes, cli.o->buf_sz);
 
@@ -305,18 +276,48 @@ static void post_write_flowing(struct connection_handle *ch)
 		else
 			ch->send_buf[send_sz - 1] = RPC_TAIL_MARK_END;
 	}
+	return send_sz;
+}
 
+static void post_write_flowing(struct connection_handle *ch)
+{
+	size_t send_sz = prep_send_buf(ch);
 	post_write(ring, &ch->e_write, ch->sock, ch->send_buf, send_sz);
 }
 
 static void start_flowing(struct connection_handle *ch)
 {
 	pr_debug("%s: start flowing %lu bytes", ch->pa->addrstr, ch->pf->bytes);
-	tsq_append(&ch->ts_flow_start);
-	ch->remain_bytes = ch->pf->bytes;
 	ch->state = CONNECTION_HANDLE_STATE_FLOWING;
 	ch->remain_bytes = ch->pf->bytes;
-	post_write_flowing(ch);
+
+	/* we use sendmsg() for the first segment to get TX timestamp
+	 * that is the start time of the flow.
+	 */
+
+	memset(&ch->mh, 0, sizeof(ch->mh));
+	memset(ch->cmsgbuf, 0, CMSG_BUF_SZ);
+
+	ch->iov[0].iov_base = ch->send_buf;
+	ch->iov[0].iov_len = prep_send_buf(ch);
+
+	ch->mh.msg_iov = ch->iov;
+	ch->mh.msg_iovlen = 1;
+
+	ch->mh.msg_control = ch->cmsgbuf;
+	ch->mh.msg_controllen = CMSG_LEN(sizeof(uint32_t));
+
+	struct cmsghdr *cmsg = CMSG_FIRSTHDR(&ch->mh);
+        cmsg->cmsg_level = SOL_SOCKET;
+        cmsg->cmsg_type = SO_TIMESTAMPING;
+        cmsg->cmsg_len = CMSG_LEN(sizeof(uint32_t));
+        *((uint32_t *) CMSG_DATA(cmsg)) = SOF_TIMESTAMPING_TX_SCHED;
+	/* XXX: use TX_SCHED instead of TX_SOFTWARE, because the time
+	 * at the first packet of the segment is sent is preferred
+	 * over that of the last packet is sent.
+	 */
+
+	post_sendmsg(ring, &ch->e_sendmsg, ch->sock, &ch->mh, 0);
 }
 
 static int post_new_connect(void)
@@ -352,6 +353,7 @@ static int post_new_connect(void)
 	ch->state = CONNECTION_HANDLE_STATE_CONNECTING;
 	io_event_init(&ch->e_connect, EVENT_TYPE_CONNECT, ch);
 	io_event_init(&ch->e_write, EVENT_TYPE_WRITE, ch);
+	io_event_init(&ch->e_sendmsg, EVENT_TYPE_SENDMSG, ch);
 	io_event_init(&ch->e_recvmsg, EVENT_TYPE_RECVMSG, ch);
 	io_event_init(&ch->e_timeout, EVENT_TYPE_TIMEOUT, ch);
 
@@ -381,16 +383,12 @@ static int post_new_connect(void)
 		pr_err("setsockopt(TCP_NODELAY): %s", strerror(errno));
 		return -1;
 	}
-	val = SOF_TIMESTAMPING_SOFTWARE | SOF_TIMESTAMPING_RX_SOFTWARE;
-	if (setsockopt(ch->sock, SOL_SOCKET, SO_TIMESTAMPING, &val, sizeof(val)) < 0) {
-		pr_err("setsockopt(SO_TIEMSTAMPING): %s", strerror(errno));
-		return -1;
-	}
 
 	post_connect(ring, &ch->e_connect, ch->sock,
 		     (struct sockaddr *)&pa->saddr, pa->salen);
 	connection_handle_append(ch);
-	tsq_append(&ch->ts_start);
+
+	clock_gettime(CLOCK_REALTIME, &ch->ts_conn_start);
 
 	return 0;
 }
@@ -400,6 +398,7 @@ static void close_connection_handle(struct connection_handle *ch)
 {
 	if (io_event_is_posted(&ch->e_write) ||
 	    io_event_is_posted(&ch->e_connect) ||
+	    io_event_is_posted(&ch->e_sendmsg) ||
 	    io_event_is_posted(&ch->e_recvmsg) ||
 	    io_event_is_posted(&ch->e_timeout)) {
 		/* still there is a posted io. defer closing */
@@ -450,6 +449,17 @@ static void process_connection_handle_connecting(struct connection_handle *ch,
 		close_connection_handle(ch);
 		return;
 	}
+	clock_gettime(CLOCK_REALTIME, &ch->ts_conn_end);
+
+	/* enable RX software timestamping and OPT CMSG for selective
+	 * TX timestamping. */
+	int val = (SOF_TIMESTAMPING_SOFTWARE | SOF_TIMESTAMPING_RX_SOFTWARE |
+		   SOF_TIMESTAMPING_OPT_CMSG);
+	if (setsockopt(ch->sock, SOL_SOCKET, SO_TIMESTAMPING, &val, sizeof(val)) < 0) {
+		pr_err("setsockopt(SO_TIEMSTAMPING): %s", strerror(errno));
+		close_connection_handle(ch);
+		return;
+	}
 
 	pr_debug("%s: connected", ch->pa->addrstr);
 
@@ -461,10 +471,12 @@ static void process_connection_handle_flowing(struct connection_handle *ch,
 					      struct io_event *e,
 					      struct io_uring_cqe *cqe)
 {
-	assert(e->type == EVENT_TYPE_WRITE);
+	assert(e->type == EVENT_TYPE_WRITE || e->type == EVENT_TYPE_SENDMSG);
 
 	if (cqe->res <= 0) {
-		pr_warn("%s: write: %s", ch->pa->addrstr, strerror(-cqe->res));
+		pr_warn("%s: %s: %s",
+			e->type == EVENT_TYPE_SENDMSG ? "sendmsg" : "write",
+			ch->pa->addrstr, strerror(-cqe->res));
 		close_connection_handle(ch);
 		return;
 	}
@@ -478,17 +490,17 @@ static void process_connection_handle_flowing(struct connection_handle *ch,
 		ch->state = CONNECTION_HANDLE_STATE_WAIT_ACK;
 
 		if (cli.o->server_tcp_info) {
-			ch->iov.iov_base = ch->tcp_info_s;
-			ch->iov.iov_len = TCP_INFO_STRLEN;
+			ch->iov[0].iov_base = ch->tcp_info_s;
+			ch->iov[0].iov_len = TCP_INFO_STRLEN;
 		} else {
-			ch->iov.iov_base = ch->msg_buf;
-			ch->iov.iov_len = MSG_BUF_SZ;
+			ch->iov[0].iov_base = ch->msg_buf;
+			ch->iov[0].iov_len = MSG_BUF_SZ;
 		}
-		memset(ch->iov.iov_base, 0, ch->iov.iov_len);
+		memset(ch->iov[0].iov_base, 0, ch->iov[0].iov_len);
 
 		memset(&ch->mh, 0, sizeof(ch->mh));
-		memset(&ch->cmsgbuf, 0, CMSG_BUF_SZ);
-		ch->mh.msg_iov = &ch->iov;
+		memset(ch->cmsgbuf, 0, CMSG_BUF_SZ);
+		ch->mh.msg_iov = ch->iov;
 		ch->mh.msg_iovlen = 1;
 		ch->mh.msg_control = ch->cmsgbuf;
 		ch->mh.msg_controllen = sizeof(ch->cmsgbuf);
@@ -499,6 +511,40 @@ static void process_connection_handle_flowing(struct connection_handle *ch,
 
 	/* we need to send more bytes */
 	post_write_flowing(ch);
+}
+
+int obtain_flow_start_time(struct connection_handle *ch)
+{
+	/* obtain tx timestamp from MSG_ERRQUEUE and svae it onto
+	 * ch->ts_flow_start. */
+
+	struct cmsghdr *cmsg;
+	char cmsgbuf[512];
+	struct msghdr mh;
+
+	memset(&mh, 0, sizeof(mh));
+	memset(&cmsg, 0, sizeof(cmsg));
+	memset(cmsgbuf, 0, sizeof(cmsgbuf));
+
+	mh.msg_control = cmsgbuf;
+	mh.msg_controllen = sizeof(cmsgbuf);
+
+	if (recvmsg(ch->sock, &mh, MSG_ERRQUEUE) < 0) {
+		pr_err("recvmsg for MSG_ERRQUEUE: %s", strerror(errno));
+		return -1;
+	}
+
+	for (cmsg = CMSG_FIRSTHDR(&mh); cmsg && cmsg->cmsg_len;
+	     cmsg = CMSG_NXTHDR(&mh, cmsg)) {
+		if (cmsg->cmsg_level == SOL_SOCKET &&
+		    cmsg->cmsg_type == SCM_TIMESTAMPING) {
+			struct scm_timestamping *ts;
+			ts = (struct scm_timestamping *)CMSG_DATA(cmsg);
+			ch->ts_flow_start = ts->ts[0];
+		}
+	}
+
+	return 0;
 }
 
 static void obtain_flow_end_time(struct connection_handle *ch)
@@ -518,7 +564,7 @@ static void obtain_flow_end_time(struct connection_handle *ch)
 			return;
 		}
 	}
-	pr_warn("failed to get rx timestamsp from recvmsg");
+	pr_warn("failed to get rx timestamp for the last received packet");
 }
 
 static void process_connection_handle_wait_ack(struct connection_handle *ch,
@@ -543,6 +589,7 @@ static void process_connection_handle_wait_ack(struct connection_handle *ch,
 
 	pr_debug("%s: %lu bytes flow acked", ch->pa->addrstr, ch->pf->bytes);
 
+	obtain_flow_start_time(ch);
 	obtain_flow_end_time(ch);
 
 	if (ch->pi) {
@@ -599,12 +646,10 @@ static int client_loop(void)
 	int ret;
 
 	pr_info("put %d connect() events", cli.o->concurrency);
-	tsq_zerorize();
 	for (i = 0; i < cli.o->concurrency; i++) {
 		if (post_new_connect() < 0)
 			return -1;
 	}
-	tsq_bulk_get_time();
 
 	if ((ret = io_uring_submit(ring)) < 0) {
 		pr_err("io_uring_submit: %s", strerror(-ret));
@@ -613,8 +658,6 @@ static int client_loop(void)
 
 	pr_notice("client loop started");
 	while (is_running()) {
-
-		tsq_zerorize();
 
 		nr_cqes = io_uring_peek_batch_cqe(ring, cqes, cli.o->batch_sz);
 		if (nr_cqes == 0) {
@@ -631,8 +674,6 @@ static int client_loop(void)
 			client_process_cqe(cqes[i]);
 
 		io_uring_cq_advance(ring, i);
-
-		tsq_bulk_get_time();
 
 		if ((ret = io_uring_submit(ring)) < 0) {
 			pr_err("io_uring_submit: %s", strerror(-ret));

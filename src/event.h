@@ -35,10 +35,11 @@ struct io_event {
 #define EVENT_TYPE_WRITE        4
 #define EVENT_TYPE_SEND         5
 #define EVENT_TYPE_RECV         6
-#define EVENT_TYPE_RECVMSG	7
-#define EVENT_TYPE_TIMEOUT      8
-#define EVENT_TYPE_CANCEL       9
-#define __EVENT_TYPE_MAX       10
+#define EVENT_TYPE_SENDMSG	8
+#define EVENT_TYPE_RECVMSG	9
+#define EVENT_TYPE_TIMEOUT      10
+#define EVENT_TYPE_CANCEL       11
+#define __EVENT_TYPE_MAX	12
 
 
 static inline bool io_event_is_posted(struct io_event *e)
@@ -93,6 +94,9 @@ void post_read(struct io_uring *ring, struct io_event *e,
 void post_timeout(struct io_uring *ring, struct io_event *e, time_t nsec_abs);
 void post_accept_multishot(struct io_uring *ring, struct io_event *e, int fd);
 void post_recv_multishot(struct io_uring *ring, struct io_event *e, int fd, int buf_grp);
+
+void post_sendmsg(struct io_uring *ring, struct io_event *e, int fd, struct msghdr *msg,
+		  unsigned flags);
 void post_recvmsg(struct io_uring *ring, struct io_event *e, int fd, struct msghdr *msg,
 		  unsigned flags);
 void post_cancel(struct io_uring *ring, struct io_event *e, int fd);
