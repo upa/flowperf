@@ -21,7 +21,7 @@ def parse_and_print(distfile:TextIO, size_factor:int):
         pdfs.append((cdfs[i][0], cdfs[i][1] - cdfs[i-1][1]))
 
     for pdf in pdfs:
-        print("{}\t{:f}".format(pdf[0], pdf[1]))
+        print("{}\t{:.10f}".format(pdf[0], pdf[1]))
 
 
 def main():

@@ -160,7 +160,7 @@ void prob_list_dump_info(prob_list_t *list)
 	prob_t *prob;
 	if (get_print_severity() >= SEVERITY_INFO) {
 		foreach_prob(list, prob) {
-			pr_info("%s\t%f", prob->key, prob->probability);
+			pr_info("%s\t%.10lf", prob->key, prob->probability);
 		}
 	}
 }
