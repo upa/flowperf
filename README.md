@@ -75,7 +75,7 @@ A *flow* in flowperf benchmarking consists of the following steps:
 Several options cange the behavior, including:
 * `-C`: Reuse TCP connections.
 * `-T`: Retrieve TCP_INFO from the server instead of sending a one-byte acknowledgment.
-* `-X`: Generate multiple flows concurrently.
+* `-x`: Generate multiple flows concurrently.
 
 
 Running a `flowperf` client requires two mandatory options: specifying
