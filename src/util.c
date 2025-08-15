@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 #include <netdb.h>
 #include <arpa/inet.h>
+#include <time.h>
 
 #include <util.h>
 #include <print.h>
@@ -98,6 +99,27 @@ void stop_running(void) {
 bool is_running(void)
 {
 	return (run != 0);
+}
+
+#define timespec_nsec(ts) ((ts)->tv_sec * 1000000000 + (ts)->tv_nsec)
+
+/* wait with partial busy poll */
+void wait_until(time_t start_time)
+{
+        struct timespec now, target, duration;
+
+        target.tv_sec = start_time;
+        target.tv_nsec = 0;
+
+        clock_gettime(CLOCK_REALTIME, &now);
+
+        if (timespec_nsec(&now) < timespec_nsec(&target)) {
+                target.tv_sec -= 1;
+                target.tv_nsec += 1000000000;
+                duration.tv_nsec = target.tv_nsec - now.tv_nsec;
+                duration.tv_sec = target.tv_sec - now.tv_sec;
+                nanosleep(&duration, NULL);
+        }
 }
 
 

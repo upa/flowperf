@@ -1,5 +1,6 @@
 /* client.c: flowperf client process  */
 
+#include "print.h"
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -754,18 +755,23 @@ int start_client(struct opts *o)
 	pr_info("intervals and probability (cumulative and normalized):");
 	prob_list_dump_info(o->intervals);
 
+	pr_notice("test duration: %d%s",
+		  cli.o->duration, cli.o->duration == 0 ? " (infinite)" : "");
+	pr_notice("number of flows to be done: %d%s",
+		  cli.o->nr_flows, cli.o->nr_flows == 0 ? " (infinite)" : "");
+
 	if (init_client_io_uring() < 0)
 		return -1;
+
+        if (o->start_time) {
+                pr_notice("wait until %ld", o->start_time);
+                wait_until(o->start_time);
+        }
 
 	start_running();
 
 	signal(SIGPIPE, SIG_IGN);
 	signal(SIGINT, signal_handler);
-
-	pr_notice("test duration: %d%s",
-		  cli.o->duration, cli.o->duration == 0 ? " (infinite)" : "");
-	pr_notice("number of flows to be done: %d%s",
-		  cli.o->nr_flows, cli.o->nr_flows == 0 ? " (infinite)" : "");
 
 	if (cli.o->duration > 0) {
 		signal(SIGALRM, signal_handler);

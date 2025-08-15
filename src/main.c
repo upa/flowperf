@@ -40,6 +40,7 @@ static void usage()
 		"\n"
 		"    -R RANDOM_SEED  set random seed\n"
 		"    -C              cache and reuse TCP connections\n"
+                "    -S START_TIME   specify start time by unixtime\n"
 		"\n"
 		"    -d ADDR@WEIGHT    dest address and its probability\n"
 		"    -D ADDR_TXT       txt contains 'ADDR WEIGHT' per line\n"
@@ -91,7 +92,7 @@ static int parse_args(int argc, char **argv, struct opts *o)
 
 #define OPTSTR_COMMON "scp:B:q:b:vh"
 #define OPTSTR_SERVER "a:N:"
-#define OPTSTR_CLIENT "n:t:x:TR:Cd:D:f:F:i:I:"
+#define OPTSTR_CLIENT "n:t:x:TR:CS:d:D:f:F:i:I:"
 #define OPTSTR OPTSTR_COMMON OPTSTR_SERVER OPTSTR_CLIENT
 
 	while ((ch = getopt(argc, argv, OPTSTR)) != -1) {
@@ -176,6 +177,14 @@ static int parse_args(int argc, char **argv, struct opts *o)
 		case 'C':
 			o->cache_sockets = true;
 			break;
+
+                case 'S':
+                        o->start_time = atoll(optarg);
+                        if (o->start_time < 1) {
+                                pr_err("invalid start time %s", optarg);
+                                return -1;
+                        }
+                        break;
 
 		case 'd':
 			c = strrchr(optarg, '@');

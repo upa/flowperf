@@ -1,5 +1,4 @@
 /* util.h */
-
 #ifndef _UTIL_H_
 #define _UTIL_H_
 
@@ -9,6 +8,7 @@
 
 #define array_size(a) (sizeof(a) / sizeof(a[0]))
 
+#include <sys/socket.h>
 
 /* convert sockaddr to ADDR:PORT string onto buf */
 void sockaddr_ntop(struct sockaddr_storage *ss, char *buf, socklen_t size);
@@ -34,6 +34,9 @@ void start_running(void);
 void stop_running(void);
 bool is_running(void);
 
+
+/* wait (partial busy poll) until the specified time (unixtime) */
+void wait_until(time_t);
 
 /* stack of u64, for caching socket fds and pointers of send_buf */
 typedef struct u64_stack_struct {
