@@ -53,6 +53,7 @@ struct opts {
 	int	nr_bufs;	/* number of buffers to be registered to io_uring */
 	bool 	cache_sockets;
         time_t  start_time;     /* unixtime */
+        double  sampling_rate;  /* rate between 0 and 1 */
 
 	prob_list_t *addrs;
 	prob_list_t *flows;

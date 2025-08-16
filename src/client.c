@@ -369,7 +369,6 @@ static int post_new_connect(void)
 		/* use a cached socket if exists */
 		pr_debug("%s: reuse a cached socket", pa->addrstr);
 		ch->sock = u64_stack_pop(pa->sock_cache);
-		connection_handle_append(ch);
 		start_flowing(ch);
 		return 0;
 	}
@@ -387,7 +386,6 @@ static int post_new_connect(void)
 
 	post_connect(ring, &ch->e_connect, ch->sock,
 		     (struct sockaddr *)&pa->saddr, pa->salen);
-	connection_handle_append(ch);
 
 	clock_gettime(CLOCK_REALTIME, &ch->ts_conn_start);
 
@@ -418,6 +416,14 @@ static void close_connection_handle(struct connection_handle *ch)
 
 	u64_stack_push(cli.send_buf_cache, (unsigned long)ch->send_buf);
 	ch->send_buf = NULL;
+
+        /* save this connection handle to the result list */
+        if (cli.o->sampling_rate == 0 ||
+            ((double)rand() / RAND_MAX) <= cli.o->sampling_rate) {
+                connection_handle_append(ch);
+        } else
+                free(ch);
+
 
 	if (cli.o->nr_flows) {
 		/* number of flows to be done is specified */
@@ -759,6 +765,8 @@ int start_client(struct opts *o)
 		  cli.o->duration, cli.o->duration == 0 ? " (infinite)" : "");
 	pr_notice("number of flows to be done: %d%s",
 		  cli.o->nr_flows, cli.o->nr_flows == 0 ? " (infinite)" : "");
+        if (cli.o->sampling_rate)
+                pr_notice("sampling rate: %f", cli.o->sampling_rate);
 
 	if (init_client_io_uring() < 0)
 		return -1;

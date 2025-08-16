@@ -41,6 +41,7 @@ static void usage()
 		"    -R RANDOM_SEED  set random seed\n"
 		"    -C              cache and reuse TCP connections\n"
                 "    -S START_TIME   specify start time by unixtime\n"
+                "    -X SAMPLE_RATE  sampling rate (0.0, 1.0]\n"
 		"\n"
 		"    -d ADDR@WEIGHT    dest address and its probability\n"
 		"    -D ADDR_TXT       txt contains 'ADDR WEIGHT' per line\n"
@@ -92,7 +93,7 @@ static int parse_args(int argc, char **argv, struct opts *o)
 
 #define OPTSTR_COMMON "scp:B:q:b:vh"
 #define OPTSTR_SERVER "a:N:"
-#define OPTSTR_CLIENT "n:t:x:TR:CS:d:D:f:F:i:I:"
+#define OPTSTR_CLIENT "n:t:x:TR:CS:X:d:D:f:F:i:I:"
 #define OPTSTR OPTSTR_COMMON OPTSTR_SERVER OPTSTR_CLIENT
 
 	while ((ch = getopt(argc, argv, OPTSTR)) != -1) {
@@ -182,6 +183,14 @@ static int parse_args(int argc, char **argv, struct opts *o)
                         o->start_time = atoll(optarg);
                         if (o->start_time < 1) {
                                 pr_err("invalid start time %s", optarg);
+                                return -1;
+                        }
+                        break;
+
+                case 'X':
+                        o->sampling_rate = atof(optarg);
+                        if (o->sampling_rate <= 0.0 || 1.0 < o->sampling_rate) {
+                                pr_err("invalid sampling rate %s", optarg);
                                 return -1;
                         }
                         break;
