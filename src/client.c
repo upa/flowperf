@@ -1,6 +1,7 @@
 /* client.c: flowperf client process  */
 
 #include "print.h"
+#include "prob.h"
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -761,6 +762,7 @@ int start_client(struct opts *o)
 	pr_info("intervals and probability (cumulative and normalized):");
 	prob_list_dump_info(o->intervals);
 
+        pr_notice("random seed: %u", cli.o->random_seed);
 	pr_notice("test duration: %d%s",
 		  cli.o->duration, cli.o->duration == 0 ? " (infinite)" : "");
 	pr_notice("number of flows to be done: %d%s",

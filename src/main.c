@@ -1,5 +1,7 @@
 
+#include <string.h>
 #include <time.h>
+#include <fcntl.h>
 
 #include <client.h>
 #include <server.h>
@@ -61,6 +63,24 @@ static void usage()
 
 static char _default_local_addr[] = DEFAULT_LOCAL_ADDR;
 
+static int get_random_seed(void)
+{
+        int fd, seed;
+
+        if ((fd = open("/dev/random", O_RDONLY)) < 0) {
+                pr_err("failed to open /dev/random: %s", strerror(errno));
+                return -1;
+        }
+
+        if (read(fd, &seed, sizeof(seed)) < 0) {
+                pr_err("failed to read /dev/random: %s", strerror(errno));
+                return -1;
+        }
+        close(fd);
+
+        return seed;
+}
+
 static int parse_args(int argc, char **argv, struct opts *o)
 {
 	double p;
@@ -74,10 +94,12 @@ static int parse_args(int argc, char **argv, struct opts *o)
 	o->nr_bufs = DEFAULT_NR_BUFS;
 	o->batch_sz = DEFAULT_BATCH_SZ;
 	o->severity = SEVERITY_WARN;
+        o->random_seed = get_random_seed();
+        if (o->random_seed < 0)
+                return -1;
 
 	/* server options */
 	o->local_addr = _default_local_addr;
-	o->random_seed = time(NULL);
 
 	/* client options */
 	o->nr_flows = -1;
