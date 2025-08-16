@@ -49,6 +49,16 @@ char *sockaddr_ntoa(struct sockaddr_storage *ss)
 	return buf;
 }
 
+long long timespec_sub_nsec(struct timespec *after, struct timespec *before)
+{
+        time_t a_nsec = (after->tv_sec * 1000000000 + after->tv_nsec);
+        time_t b_nsec = (before->tv_sec * 1000000000 + before->tv_nsec);
+
+        if (a_nsec == 0 || b_nsec == 0)
+                return 0;
+
+        return (long long)a_nsec - (long long)b_nsec;
+}
 
 int build_tcp_info_string(int sock, char *buf, size_t size)
 {

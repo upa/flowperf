@@ -4,8 +4,10 @@
 #include "prob.h"
 #include <netinet/in.h>
 #include <stdint.h>
+#include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/timerfd.h>
 #include <netdb.h>
 #include <time.h>
 #include <signal.h>
@@ -22,6 +24,8 @@
 #include <util.h>
 #include <event.h>
 
+static volatile sig_atomic_t interval_trigger = 0;
+
 /* strcture representing flowperf client process */
 struct client {
 	struct opts *o;
@@ -32,7 +36,6 @@ struct client {
 	uint64_t nr_flows_started;
 	uint64_t nr_flows_done;
         uint64_t nr_flows_success;
-        int     print_stat_triger;
 
 	struct timespec start_time;
 
@@ -43,6 +46,24 @@ struct client {
 
 static struct client cli;
 static struct io_uring *ring = &cli.ring;
+
+
+static void print_cli_stat(bool finish)
+{
+        uint64_t cur = cli.nr_flows_success;
+        static uint64_t last;
+        struct timespec now;
+
+        if (finish) {
+                clock_gettime(CLOCK_REALTIME, &now);
+                long long elapsed = timespec_sub_nsec(&now, &cli.start_time);
+                printf("total_tps=%lf\n", (double)cur / (elapsed / 1000000000));
+        } else {
+                printf("tps=%lu\n", cur - last);
+                last = cur;
+        }
+}
+
 
 /* functions for probablity list */
 
@@ -161,6 +182,7 @@ static int prob_list_iter_interval(prob_t *prob)
 
 struct connection_handle {
 	/* a handle for a connection to a server */
+	int	state;
 	int	sock;
 
 	struct connection_handle *next;
@@ -169,8 +191,7 @@ struct connection_handle {
 	prob_flow_t *pf;
 	prob_interval_t *pi;
 
-	/* state and uring event handlers */
-	int		state;
+	/* uring event handlers */
 	struct io_event e_connect;
 	struct io_event e_sendmsg;
 	struct io_event e_write;
@@ -213,19 +234,6 @@ static void connection_handle_append(struct connection_handle *ch)
 	}
 }
 
-static long long timespec_sub_nsec(struct timespec *after, struct timespec *before)
-{
-	time_t a_nsec = (after->tv_sec * 1000000000 + after->tv_nsec);
-	time_t b_nsec = (before->tv_sec * 1000000000 + before->tv_nsec);
-
-	if (a_nsec == 0 || b_nsec == 0)
-		return 0;
-
-	return (long long)a_nsec - (long long)b_nsec;
-}
-
-#define timespec_nsec(ts) ((ts)->tv_sec * 1000000000 + (ts)->tv_nsec)
-
 void print_connection_handle_result(FILE *fp, struct connection_handle *ch)
 {
 	char buf[512];
@@ -267,6 +275,59 @@ static void print_result(FILE *fp)
 	for (ch = cli.first; ch != NULL; ch = ch->next) 
 		print_connection_handle_result(fp, ch);
 }
+
+struct timerfd_handle {
+        int     state;  /* match to struct connection_handle.state */
+
+        int             fd;     /* timerfd */
+        uint64_t        v;
+        struct io_event e_read;
+} tfd_h;
+
+static int start_timerfd_handle(void)
+{
+        struct itimerspec ts;
+
+        memset(&tfd_h, 0, sizeof(tfd_h));
+        tfd_h.state = CONNECTION_HANDLE_STATE_TIMERFD;
+
+        tfd_h.fd = timerfd_create(CLOCK_MONOTONIC, 0);
+        if (tfd_h.fd < 0) {
+                pr_err("timerfd_create: %s", strerror(errno));
+                return -1;
+        }
+
+        ts.it_value.tv_sec = 1;
+        ts.it_value.tv_nsec = 0;
+        ts.it_interval.tv_sec = 1;
+        ts.it_interval.tv_nsec = 0;
+
+        if (timerfd_settime(tfd_h.fd, 0, &ts, NULL) < 0) {
+                pr_err("timerfd_settime: %s", strerror(errno));
+                return -1;
+        }
+
+        io_event_init(&tfd_h.e_read, EVENT_TYPE_READ, &tfd_h);
+        post_read(ring, &tfd_h.e_read, tfd_h.fd, (char *)&tfd_h.v, sizeof(tfd_h.v));
+
+        return 0;
+}
+
+static void process_timerfd_handle(struct timerfd_handle *tfd,
+                                   struct io_event *e,
+                                   struct io_uring_cqe *cqe)
+{
+        assert(e->type == EVENT_TYPE_READ);
+        if (cqe->res < 0) {
+                pr_err("read timerfd: %s", strerror(errno));
+                return;
+        }
+
+        print_cli_stat(false);
+        post_read(ring, &tfd_h.e_read, tfd_h.fd, (char *)&tfd_h.v, sizeof(tfd_h.v));
+}
+
+
 
 static size_t prep_send_buf(struct connection_handle *ch)
 {
@@ -646,26 +707,13 @@ static void client_process_cqe(struct io_uring_cqe *cqe)
 	case CONNECTION_HANDLE_STATE_INTERVAL:
 		process_connection_handle_interval(ch, e, cqe);
 		break;
+        case CONNECTION_HANDLE_STATE_TIMERFD:
+                process_timerfd_handle((struct timerfd_handle *)ch, e, cqe);
+                break;
 	default:
 		pr_err("invalid connection handle state: %d", ch->state);
 		close_connection_handle(ch);
 	}
-}
-
-static void print_cli_stat(bool finish)
-{
-        uint64_t cur = cli.nr_flows_success;
-        static uint64_t last;
-        struct timespec now;
-
-        if (finish) {
-                clock_gettime(CLOCK_REALTIME, &now);
-                long long elapsed = timespec_sub_nsec(&now, &cli.start_time);
-                printf("total_tps=%lf\n", (double)cur / (elapsed / 1000000000));
-        } else {
-                printf("tps=%lu\n", cur - last);
-                last = cur;
-        }
 }
 
 static int client_loop(void)
@@ -673,6 +721,10 @@ static int client_loop(void)
 	struct io_uring_cqe *cqes[MAX_BATCH_SZ];
 	unsigned nr_cqes, i;
 	int ret;
+
+        pr_info("put timerfd read event");
+        if (start_timerfd_handle() < 0)
+                return -1;
 
 	pr_info("put %d connect() events", cli.o->concurrency);
 	for (i = 0; i < cli.o->concurrency; i++) {
@@ -708,11 +760,6 @@ static int client_loop(void)
 			pr_err("io_uring_submit: %s", strerror(-ret));
 			return -1;
 		}
-
-                if (cli.print_stat_triger) {
-                        print_cli_stat(false);
-                        cli.print_stat_triger = 0;
-                }
 	}
 
 	pr_info("release io_uring");
@@ -735,23 +782,17 @@ static int init_client_io_uring(void)
 	return 0;
 }
 
-static void sigint_handler(int signo)
+static void signal_handler(int signo)
 {
-        pr_notice("^C pressed. shutting down.");
+        switch (signo) {
+        case SIGINT:
+                pr_notice("^C pressed. shutting down.");
+                break;
+        case SIGALRM:
+                break;
+        }
+
 	stop_running();
-}
-
-static void sigalrm_handler(int signo)
-{
-        static int nr_alrm;
-
-        cli.print_stat_triger = 1;
-
-        nr_alrm += 1;
-        if (cli.o->duration && cli.o->duration <= nr_alrm) {
-                stop_running();
-        } else
-                alarm(1);
 }
 
 int start_client(struct opts *o)
@@ -815,9 +856,12 @@ int start_client(struct opts *o)
 	start_running();
 
 	signal(SIGPIPE, SIG_IGN);
-	signal(SIGINT, sigint_handler);
-        signal(SIGALRM, sigalrm_handler);
-        alarm(1);
+	signal(SIGINT, signal_handler);
+
+        if (cli.o->duration > 0) {
+                signal(SIGALRM, signal_handler);
+                alarm(cli.o->duration);
+        }
 
 	clock_gettime(CLOCK_REALTIME, &cli.start_time);
 

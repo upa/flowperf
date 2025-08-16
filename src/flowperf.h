@@ -68,6 +68,8 @@
 
 #define CONNECTION_HANDLE_STATE_DONE		5
 
+#define CONNECTION_HANDLE_STATE_TIMERFD         6
+/* Special state for polling a timerfd */
 
 
 inline static char connection_handle_state_name(int state)

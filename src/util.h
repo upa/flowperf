@@ -14,6 +14,12 @@
 void sockaddr_ntop(struct sockaddr_storage *ss, char *buf, socklen_t size);
 char *sockaddr_ntoa(struct sockaddr_storage *ss);
 
+/* timespec handling */
+#include <time.h>
+
+long long timespec_sub_nsec(struct timespec *after, struct timespec *before);
+#define timespec_nsec(ts) ((ts)->tv_sec * 1000000000 + (ts)->tv_nsec)
+
 
 /* tcp_info */
 #include <linux/tcp.h>
