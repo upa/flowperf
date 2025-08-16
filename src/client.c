@@ -3,6 +3,7 @@
 #include "print.h"
 #include "prob.h"
 #include <netinet/in.h>
+#include <stdint.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <netdb.h>
@@ -17,6 +18,7 @@
 
 #include <flowperf.h>
 #include <client.h>
+#include <unistd.h>
 #include <util.h>
 #include <event.h>
 
@@ -27,8 +29,10 @@ struct client {
 	/* easy list with connection_handle->next  */
 	struct connection_handle *first, *last;
 
-	int nr_flows_started;
-	int nr_flows_done;
+	uint64_t nr_flows_started;
+	uint64_t nr_flows_done;
+        uint64_t nr_flows_success;
+        int     print_stat_triger;
 
 	struct timespec start_time;
 
@@ -428,7 +432,7 @@ static void close_connection_handle(struct connection_handle *ch)
 
 	if (cli.o->nr_flows) {
 		/* number of flows to be done is specified */
-		cli.nr_flows_done++;
+                cli.nr_flows_done++;
 		if (cli.nr_flows_done >= cli.o->nr_flows) {
 			/* specified number of flows done. finish the benchmark */
 			stop_running();
@@ -609,6 +613,7 @@ static void process_connection_handle_wait_ack(struct connection_handle *ch,
 
 	/* nothing to do. close! */
 	ch->state = CONNECTION_HANDLE_STATE_DONE;
+        cli.nr_flows_success++;
 
 close:
 	close_connection_handle(ch);
@@ -645,6 +650,22 @@ static void client_process_cqe(struct io_uring_cqe *cqe)
 		pr_err("invalid connection handle state: %d", ch->state);
 		close_connection_handle(ch);
 	}
+}
+
+static void print_cli_stat(bool finish)
+{
+        uint64_t cur = cli.nr_flows_success;
+        static uint64_t last;
+        struct timespec now;
+
+        if (finish) {
+                clock_gettime(CLOCK_REALTIME, &now);
+                long long elapsed = timespec_sub_nsec(&now, &cli.start_time);
+                printf("total_tps=%lf\n", (double)cur / (elapsed / 1000000000));
+        } else {
+                printf("tps=%lu\n", cur - last);
+                last = cur;
+        }
 }
 
 static int client_loop(void)
@@ -687,6 +708,11 @@ static int client_loop(void)
 			pr_err("io_uring_submit: %s", strerror(-ret));
 			return -1;
 		}
+
+                if (cli.print_stat_triger) {
+                        print_cli_stat(false);
+                        cli.print_stat_triger = 0;
+                }
 	}
 
 	pr_info("release io_uring");
@@ -709,15 +735,23 @@ static int init_client_io_uring(void)
 	return 0;
 }
 
-static void signal_handler(int signo) {
-	switch (signo) {
-	case SIGINT:
-		pr_notice("^C pressed. shutting down.");
-		break;
-	case SIGALRM:
-		break;
-	}
+static void sigint_handler(int signo)
+{
+        pr_notice("^C pressed. shutting down.");
 	stop_running();
+}
+
+static void sigalrm_handler(int signo)
+{
+        static int nr_alrm;
+
+        cli.print_stat_triger = 1;
+
+        nr_alrm += 1;
+        if (cli.o->duration && cli.o->duration <= nr_alrm) {
+                stop_running();
+        } else
+                alarm(1);
 }
 
 int start_client(struct opts *o)
@@ -781,19 +815,17 @@ int start_client(struct opts *o)
 	start_running();
 
 	signal(SIGPIPE, SIG_IGN);
-	signal(SIGINT, signal_handler);
-
-	if (cli.o->duration > 0) {
-		signal(SIGALRM, signal_handler);
-		alarm(cli.o->duration);
-	}
-
+	signal(SIGINT, sigint_handler);
+        signal(SIGALRM, sigalrm_handler);
+        alarm(1);
 
 	clock_gettime(CLOCK_REALTIME, &cli.start_time);
 
 	ret = client_loop();
 
 	print_result(stdout);
+
+        print_cli_stat(true);
 
 	return ret;
 }
