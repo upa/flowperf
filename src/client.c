@@ -37,13 +37,6 @@ struct client {
 
 	struct timespec start_time;     /* start time of the benchmark */
 
-        /* rate control */
-        time_t interval_ns;        /* interval between transactions: 1 / tps_rate */
-        struct timespec next_time;      /* time to post a new
-                                         * connect() if tps_rate is
-                                         * spceified.
-                                         */
-
 	u64_stack_t	*send_buf_cache;
 
 	struct io_uring ring;
@@ -60,7 +53,7 @@ static void print_cli_stat(bool finish)
         struct timespec now;
 
         if (finish) {
-                clock_gettime(CLOCK_REALTIME, &now);
+                clock_gettime(CLOCK_MONOTONIC, &now);
                 long long elapsed = timespec_sub_nsec(&now, &cli.start_time);
                 printf("total_tps=%lf\n", (double)cur / (elapsed / SEC_NS));
         } else {
@@ -68,6 +61,64 @@ static void print_cli_stat(bool finish)
                 last = cur;
         }
 }
+
+/* easy token bucket to control transaction rate */
+struct bucket {
+	time_t window_us;       /* update window */
+        double token_max;        /* token max (token in 1 sec) */
+	double token_refill;     /* refilled token per window */
+	double token;    /* 1 token 1 transaction */
+
+	struct timespec last; /* last time when window end */
+};
+
+#define WINDOW_US       500
+#define SEC_US          1000000
+#define WIN_PER_SEC     (SEC_US / WINDOW_US)
+
+void bucket_init(struct bucket *b, int tps)
+{
+	b->window_us = WINDOW_US;
+	b->token_refill = (double)tps / (double)WIN_PER_SEC;
+        b->token_max = max(b->token_refill * WIN_PER_SEC, 1);
+	b->token = b->token_max;
+	clock_gettime(CLOCK_MONOTONIC, &b->last);
+
+        pr_debug("bucket: win_usec=%ld token_max=%f token_refill=%f",
+                 b->window_us, b->token_max, b->token_refill);
+}
+
+time_t bucket_get_wait_duration(struct bucket *b)
+{
+	struct timespec now;
+	long long elapsed;
+
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	elapsed = timespec_sub_nsec(&now, &b->last) / 1000; /* nsec to usec */
+        if (elapsed < 0) {
+                pr_warn("negative elapsed value: %lld", elapsed);
+                b->last = now;
+                return b->window_us * 1000;
+        }
+
+        /* refill */
+        if (elapsed >= b->window_us) {
+                for (; elapsed >= b->window_us; elapsed -= b->window_us)
+                        b->token = min(b->token + b->token_refill, b->token_max);
+                b->last = now;
+        }
+
+	if (b->token >= 1) {
+		b->token -= 1;
+		return 0;
+	}
+
+	/* no more token. sleep until next window */
+        return (elapsed < b->window_us ? b->window_us - elapsed : b->window_us) * 1000;
+}
+
+static struct bucket bucket;
+
 
 
 /* functions for probablity list */
@@ -431,7 +482,7 @@ static int post_new_connect(void)
 	post_connect(ring, &ch->e_connect, ch->sock,
 		     (struct sockaddr *)&pa->saddr, pa->salen);
 
-	clock_gettime(CLOCK_REALTIME, &ch->ts_conn_start);
+	clock_gettime(CLOCK_MONOTONIC, &ch->ts_conn_start);
 
 	return 0;
 }
@@ -500,7 +551,7 @@ static void process_connection_handle_connecting(struct connection_handle *ch,
 		close_connection_handle(ch);
 		return;
 	}
-	clock_gettime(CLOCK_REALTIME, &ch->ts_conn_end);
+	clock_gettime(CLOCK_MONOTONIC, &ch->ts_conn_end);
 
 	/* enable RX software timestamping and OPT CMSG for selective
 	 * TX timestamping. */
@@ -644,28 +695,13 @@ static void process_connection_handle_wait_ack(struct connection_handle *ch,
 	obtain_flow_end_time(ch);
         cli.nr_flows_success++;
 
-	if (cli.interval_ns) {
-		/* sleep interval */
-                struct timespec now;
-                clock_gettime(CLOCK_REALTIME, &now);
-
-                if (timespec_comp(&cli.next_time, &now) > 0) {
-                        /* it is not the time to post a new connection yet. wait */
-                        time_t interval;
-                        interval = timespec_sub_nsec(&cli.next_time, &now);
-                        timespec_add_nsec(&cli.next_time, cli.interval_ns,
-                                          &cli.next_time);
-                        pr_debug("timeout: interval %ld", interval);
+	if (cli.o->tps_rate) {
+                time_t wait = bucket_get_wait_duration(&bucket);
+                if (wait > 0) {
+                        pr_debug("timeout: wait time %ld", wait);
                         ch->state = CONNECTION_HANDLE_STATE_INTERVAL;
-                        post_timeout(ring, &ch->e_timeout, interval);
+                        post_timeout(ring, &ch->e_timeout, wait);
                         return;
-                } else {
-                        /* it is past the time to post a new connection.
-                         * just update the cli.next_time based on the current time.
-                         */
-                        pr_debug("timeout passed");
-                        timespec_add_nsec(&cli.next_time, cli.interval_ns,
-                                          &cli.next_time);
                 }
 	}
 
@@ -681,7 +717,20 @@ static void process_connection_handle_interval(struct connection_handle *ch,
 					       struct io_uring_cqe *cqe)
 {
 	assert(e->type == EVENT_TYPE_TIMEOUT);
-        pr_debug("interval handle done");
+
+	if (cli.o->tps_rate) {
+                time_t wait = bucket_get_wait_duration(&bucket);
+                /* cannot obtain token, wait again */
+                if (wait > 0) {
+                        pr_debug("timeout again, wait time %ld", wait);
+                        ch->state = CONNECTION_HANDLE_STATE_INTERVAL;
+                        post_timeout(ring, &ch->e_timeout, wait);
+                        return;
+                }
+	}
+
+        pr_debug("interval handle done and released");
+
 	ch->state = CONNECTION_HANDLE_STATE_DONE;
 	close_connection_handle(ch);
 }
@@ -799,10 +848,8 @@ int start_client(struct opts *o)
 	memset(&cli, 0, sizeof(cli));
 	cli.o = o;
 
-        if (cli.o->tps_rate) {
-                clock_gettime(CLOCK_REALTIME, &cli.next_time);
-                cli.interval_ns = SEC_NS / cli.o->tps_rate;
-        }
+        if (cli.o->tps_rate)
+                bucket_init(&bucket, cli.o->tps_rate);
 
 	if ((cli.send_buf_cache = u64_stack_alloc(cli.o->concurrency)) == NULL) {
 		pr_err("u64_stack_alloc: %s", strerror(errno));
@@ -837,8 +884,8 @@ int start_client(struct opts *o)
 		  cli.o->duration, cli.o->duration == 0 ? " (infinite)" : "");
 	pr_notice("number of flows to be done: %d%s",
 		  cli.o->nr_flows, cli.o->nr_flows == 0 ? " (infinite)" : "");
-        pr_notice("target rate: %d (%ld nsec interval))",
-                  cli.o->tps_rate, cli.interval_ns);
+        pr_notice("target rate: %d", cli.o->tps_rate);
+
         if (cli.o->sampling_rate)
                 pr_notice("sampling rate: %f", cli.o->sampling_rate);
 
@@ -860,7 +907,7 @@ int start_client(struct opts *o)
                 alarm(cli.o->duration);
         }
 
-	clock_gettime(CLOCK_REALTIME, &cli.start_time);
+	clock_gettime(CLOCK_MONOTONIC, &cli.start_time);
 
 	ret = client_loop();
 
