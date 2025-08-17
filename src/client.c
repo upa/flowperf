@@ -664,6 +664,7 @@ static void process_connection_handle_wait_ack(struct connection_handle *ch,
 
 	obtain_flow_start_time(ch);
 	obtain_flow_end_time(ch);
+        cli.nr_flows_success++;
 
 	if (ch->pi) {
 		/* sleep interval */
@@ -674,7 +675,6 @@ static void process_connection_handle_wait_ack(struct connection_handle *ch,
 
 	/* nothing to do. close! */
 	ch->state = CONNECTION_HANDLE_STATE_DONE;
-        cli.nr_flows_success++;
 
 close:
 	close_connection_handle(ch);
