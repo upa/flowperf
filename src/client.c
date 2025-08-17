@@ -664,7 +664,8 @@ static void process_connection_handle_wait_ack(struct connection_handle *ch,
                          * just update the cli.next_time based on the current time.
                          */
                         pr_debug("timeout passed");
-                        timespec_add_nsec(&now, cli.interval_ns, &cli.next_time);
+                        timespec_add_nsec(&cli.next_time, cli.interval_ns,
+                                          &cli.next_time);
                 }
 	}
 
@@ -798,8 +799,10 @@ int start_client(struct opts *o)
 	memset(&cli, 0, sizeof(cli));
 	cli.o = o;
 
-        if (cli.o->tps_rate)
+        if (cli.o->tps_rate) {
+                clock_gettime(CLOCK_REALTIME, &cli.next_time);
                 cli.interval_ns = SEC_NS / cli.o->tps_rate;
+        }
 
 	if ((cli.send_buf_cache = u64_stack_alloc(cli.o->concurrency)) == NULL) {
 		pr_err("u64_stack_alloc: %s", strerror(errno));
