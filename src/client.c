@@ -72,7 +72,7 @@ struct bucket {
 	struct timespec last; /* last time when window end */
 };
 
-#define WINDOW_US       500
+#define WINDOW_US       10
 #define SEC_US          1000000
 #define WIN_PER_SEC     (SEC_US / WINDOW_US)
 
@@ -81,7 +81,8 @@ void bucket_init(struct bucket *b, int tps)
 	b->window_us = WINDOW_US;
 	b->token_refill = (double)tps / (double)WIN_PER_SEC;
         b->token_max = max(b->token_refill * WIN_PER_SEC, 1);
-	b->token = b->token_max;
+	b->token = max(b->token_refill, 1);     /* start token */
+
 	clock_gettime(CLOCK_MONOTONIC, &b->last);
 
         pr_debug("bucket: win_usec=%ld token_max=%f token_refill=%f",
@@ -93,6 +94,12 @@ time_t bucket_get_wait_duration(struct bucket *b)
 	struct timespec now;
 	long long elapsed;
 
+	if (b->token >= 1) {
+		b->token -= 1;
+		return 0;
+	}
+
+        /* refill */
 	clock_gettime(CLOCK_MONOTONIC, &now);
 	elapsed = timespec_sub_nsec(&now, &b->last) / 1000; /* nsec to usec */
         if (elapsed < 0) {
@@ -101,7 +108,6 @@ time_t bucket_get_wait_duration(struct bucket *b)
                 return b->window_us * 1000;
         }
 
-        /* refill */
         if (elapsed >= b->window_us) {
                 for (; elapsed >= b->window_us; elapsed -= b->window_us)
                         b->token = min(b->token + b->token_refill, b->token_max);
@@ -113,8 +119,8 @@ time_t bucket_get_wait_duration(struct bucket *b)
 		return 0;
 	}
 
-	/* no more token. sleep until next window */
-        return (elapsed < b->window_us ? b->window_us - elapsed : b->window_us) * 1000;
+	/* no more token. wait until the next token is filled  */
+        return ((1.0 - b->token) / b->token_refill) * b->window_us * 1000;
 }
 
 static struct bucket bucket;
