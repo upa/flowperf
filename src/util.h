@@ -17,8 +17,13 @@ char *sockaddr_ntoa(struct sockaddr_storage *ss);
 /* timespec handling */
 #include <time.h>
 
+#define SEC_NS 1000000000
+
 long long timespec_sub_nsec(struct timespec *after, struct timespec *before);
-#define timespec_nsec(ts) ((ts)->tv_sec * 1000000000 + (ts)->tv_nsec)
+void timespec_add_nsec(struct timespec *ts, time_t nsec, struct timespec *ret);
+int timespec_comp(struct timespec *after, struct timespec *before);
+
+#define timespec_nsec(ts) ((ts)->tv_sec * SEC_NS + (ts)->tv_nsec)
 
 
 /* tcp_info */

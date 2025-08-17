@@ -51,13 +51,36 @@ char *sockaddr_ntoa(struct sockaddr_storage *ss)
 
 long long timespec_sub_nsec(struct timespec *after, struct timespec *before)
 {
-        time_t a_nsec = (after->tv_sec * 1000000000 + after->tv_nsec);
-        time_t b_nsec = (before->tv_sec * 1000000000 + before->tv_nsec);
+        long long a_nsec = (after->tv_sec * 1000000000 + after->tv_nsec);
+        long long b_nsec = (before->tv_sec * 1000000000 + before->tv_nsec);
+        return (long long)(a_nsec - b_nsec);
+}
 
-        if (a_nsec == 0 || b_nsec == 0)
-                return 0;
+void timespec_add_nsec(struct timespec *ts, time_t nsec, struct timespec *ret)
+{
+        ret->tv_nsec = ts->tv_nsec + nsec;
+        ret->tv_sec = ts->tv_sec;
+        while (ret->tv_nsec >= SEC_NS) {
+                ret->tv_nsec -= SEC_NS;
+                ret->tv_sec += 1;
+        }
+}
 
-        return (long long)a_nsec - (long long)b_nsec;
+int timespec_comp(struct timespec *after, struct timespec *before)
+{
+
+        if (after->tv_sec > before->tv_sec)
+                return 1;
+        if (after->tv_sec < before->tv_sec)
+                return -1;
+
+        /* tv_sec is the same, compre tv_nsec*/
+        if (after->tv_nsec > before->tv_nsec)
+                return 1;
+        if (after->tv_nsec < before->tv_nsec)
+                return -1;
+
+        return 0;
 }
 
 int build_tcp_info_string(int sock, char *buf, size_t size)
@@ -111,8 +134,6 @@ bool is_running(void)
 	return (run != 0);
 }
 
-#define timespec_nsec(ts) ((ts)->tv_sec * 1000000000 + (ts)->tv_nsec)
-
 /* wait with partial busy poll */
 void wait_until(time_t start_time)
 {
@@ -125,7 +146,7 @@ void wait_until(time_t start_time)
 
         if (timespec_nsec(&now) < timespec_nsec(&target)) {
                 target.tv_sec -= 1;
-                target.tv_nsec += 1000000000;
+                target.tv_nsec += SEC_NS;
                 duration.tv_nsec = target.tv_nsec - now.tv_nsec;
                 duration.tv_sec = target.tv_sec - now.tv_sec;
                 nanosleep(&duration, NULL);

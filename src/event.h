@@ -91,7 +91,7 @@ void post_write(struct io_uring *ring, struct io_event *e,
 		int fd, char *buf, size_t len);
 void post_read(struct io_uring *ring, struct io_event *e,
                int fd, char *buf, size_t len);
-void post_timeout(struct io_uring *ring, struct io_event *e, time_t nsec_abs);
+void post_timeout(struct io_uring *ring, struct io_event *e, time_t nsec);
 void post_accept_multishot(struct io_uring *ring, struct io_event *e, int fd);
 void post_recv_multishot(struct io_uring *ring, struct io_event *e, int fd, int buf_grp);
 

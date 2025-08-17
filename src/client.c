@@ -24,8 +24,6 @@
 #include <util.h>
 #include <event.h>
 
-static volatile sig_atomic_t interval_trigger = 0;
-
 /* strcture representing flowperf client process */
 struct client {
 	struct opts *o;
@@ -37,7 +35,14 @@ struct client {
 	uint64_t nr_flows_done;
         uint64_t nr_flows_success;
 
-	struct timespec start_time;
+	struct timespec start_time;     /* start time of the benchmark */
+
+        /* rate control */
+        time_t interval_ns;        /* interval between transactions: 1 / tps_rate */
+        struct timespec next_time;      /* time to post a new
+                                         * connect() if tps_rate is
+                                         * spceified.
+                                         */
 
 	u64_stack_t	*send_buf_cache;
 
@@ -57,7 +62,7 @@ static void print_cli_stat(bool finish)
         if (finish) {
                 clock_gettime(CLOCK_REALTIME, &now);
                 long long elapsed = timespec_sub_nsec(&now, &cli.start_time);
-                printf("total_tps=%lf\n", (double)cur / (elapsed / 1000000000));
+                printf("total_tps=%lf\n", (double)cur / (elapsed / SEC_NS));
         } else {
                 printf("tps=%lu\n", cur - last);
                 last = cur;
@@ -85,12 +90,6 @@ typedef struct prob_addr_struct {
 typedef struct prob_flow_struct {
 	ssize_t bytes;
 } prob_flow_t;
-
-/* o->intervals->probs[n].data */
-typedef struct prob_interval_struct {
-	time_t interval;
-} prob_interval_t;
-
 
 static int prob_list_iter_addr(prob_t *prob)
 {
@@ -156,24 +155,6 @@ static int prob_list_iter_flow(prob_t *prob)
 	return 0;
 }
 
-static int prob_list_iter_interval(prob_t *prob)
-{
-	prob_interval_t *pi;
-
-	if ((pi = malloc(sizeof(*pi))) == NULL) {
-		pr_err("malloc: %s", strerror(errno));
-		return -1;
-	}
-	memset(pi, 0, sizeof(*pi));
-
-	pi->interval = atol(prob->key);
-	if (pi->interval < 0) {
-		pr_err("invalid interval: %s", prob->key);
-		return -1;
-	}
-	prob->data = pi;
-	return 0;
-}
 
 
 
@@ -189,7 +170,6 @@ struct connection_handle {
 
 	prob_addr_t *pa;
 	prob_flow_t *pf;
-	prob_interval_t *pi;
 
 	/* uring event handlers */
 	struct io_event e_connect;
@@ -426,8 +406,6 @@ static int post_new_connect(void)
 
 	ch->pa = prob_list_pickup_data_uniformly(cli.o->addrs);
 	ch->pf = prob_list_pickup_data_uniformly(cli.o->flows);
-	ch->pi = prob_list_is_empty(cli.o->intervals) ?
-		NULL : prob_list_pickup_data_uniformly(cli.o->intervals);
 
 	prob_addr_t *pa = ch->pa;
 
@@ -666,11 +644,28 @@ static void process_connection_handle_wait_ack(struct connection_handle *ch,
 	obtain_flow_end_time(ch);
         cli.nr_flows_success++;
 
-	if (ch->pi) {
+	if (cli.interval_ns) {
 		/* sleep interval */
-		ch->state = CONNECTION_HANDLE_STATE_INTERVAL;
-		post_timeout(ring, &ch->e_timeout, ch->pi->interval);
-		return;
+                struct timespec now;
+                clock_gettime(CLOCK_REALTIME, &now);
+
+                if (timespec_comp(&cli.next_time, &now) > 0) {
+                        /* it is not the time to post a new connection yet. wait */
+                        time_t interval;
+                        interval = timespec_sub_nsec(&cli.next_time, &now);
+                        timespec_add_nsec(&cli.next_time, cli.interval_ns,
+                                          &cli.next_time);
+                        pr_debug("timeout: interval %ld", interval);
+                        ch->state = CONNECTION_HANDLE_STATE_INTERVAL;
+                        post_timeout(ring, &ch->e_timeout, interval);
+                        return;
+                } else {
+                        /* it is past the time to post a new connection.
+                         * just update the cli.next_time based on the current time.
+                         */
+                        pr_debug("timeout passed");
+                        timespec_add_nsec(&now, cli.interval_ns, &cli.next_time);
+                }
 	}
 
 	/* nothing to do. close! */
@@ -685,6 +680,7 @@ static void process_connection_handle_interval(struct connection_handle *ch,
 					       struct io_uring_cqe *cqe)
 {
 	assert(e->type == EVENT_TYPE_TIMEOUT);
+        pr_debug("interval handle done");
 	ch->state = CONNECTION_HANDLE_STATE_DONE;
 	close_connection_handle(ch);
 }
@@ -802,6 +798,9 @@ int start_client(struct opts *o)
 	memset(&cli, 0, sizeof(cli));
 	cli.o = o;
 
+        if (cli.o->tps_rate)
+                cli.interval_ns = SEC_NS / cli.o->tps_rate;
+
 	if ((cli.send_buf_cache = u64_stack_alloc(cli.o->concurrency)) == NULL) {
 		pr_err("u64_stack_alloc: %s", strerror(errno));
 		return -1;
@@ -813,12 +812,8 @@ int start_client(struct opts *o)
 	if (prob_list_iterate(o->flows, prob_list_iter_flow) < 0)
 		return -1;
 
-	if (prob_list_iterate(o->intervals, prob_list_iter_interval) < 0)
-		return -1;
-
 	prob_list_convert_to_cdf(o->addrs);
 	prob_list_convert_to_cdf(o->flows);
-	prob_list_convert_to_cdf(o->intervals);
 
 	pr_info("destinations and probability (cumulative and normalized):");
 	prob_list_dump_info(o->addrs);
@@ -834,14 +829,13 @@ int start_client(struct opts *o)
 		return -1;
 	}
 
-	pr_info("intervals and probability (cumulative and normalized):");
-	prob_list_dump_info(o->intervals);
-
         pr_notice("random seed: %u", cli.o->random_seed);
 	pr_notice("test duration: %d%s",
 		  cli.o->duration, cli.o->duration == 0 ? " (infinite)" : "");
 	pr_notice("number of flows to be done: %d%s",
 		  cli.o->nr_flows, cli.o->nr_flows == 0 ? " (infinite)" : "");
+        pr_notice("target rate: %d (%ld nsec interval))",
+                  cli.o->tps_rate, cli.interval_ns);
         if (cli.o->sampling_rate)
                 pr_notice("sampling rate: %f", cli.o->sampling_rate);
 

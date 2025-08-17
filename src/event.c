@@ -49,14 +49,17 @@ void post_read(struct io_uring *ring, struct io_event *e,
 	e->state = EVENT_STATE_POSTED;
 }
 
-void post_timeout(struct io_uring *ring, struct io_event *e, time_t nsec_abs)
+void post_timeout(struct io_uring *ring, struct io_event *e, time_t nsec)
 {
-	struct __kernel_timespec ts = {};
 	struct io_uring_sqe *sqe;
+        struct __kernel_timespec ts = { .tv_sec = 0, .tv_nsec = nsec };
 
 	assert_event_state_for_post(e);
 	
-	ts.tv_nsec = nsec_abs;
+        while (ts.tv_nsec >= 1000000000) {
+                ts.tv_nsec -= 1000000000;
+                ts.tv_sec++;
+        }
 
 	sqe = io_uring_get_sqe_always(ring);
 	io_uring_prep_timeout(sqe, &ts, 0, 0);

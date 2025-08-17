@@ -48,6 +48,7 @@ struct opts {
 	int     nr_flows;
 	int 	duration;
 	int 	concurrency;
+        int     tps_rate;
 	bool	server_tcp_info;	/* get tcp_info from the server side */
 	unsigned int     random_seed;
 	int	nr_bufs;	/* number of buffers to be registered to io_uring */
@@ -57,7 +58,6 @@ struct opts {
 
 	prob_list_t *addrs;
 	prob_list_t *flows;
-	prob_list_t *intervals;
 };
 
 

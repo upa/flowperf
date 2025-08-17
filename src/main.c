@@ -38,6 +38,7 @@ static void usage()
 		"    -n NUMBER       number of flows to be done, default 0 (inifinit)\n"
 		"    -t DURATION     test duration (sec), default 10, 0 means inifnite\n"
 		"    -x CONCURRENCY  number of cunccurent flows, default 1\n"
+                "    -r RATE         specify rate in transaction/sec\n"
 		"    -T              get tcp_info from the server side for each flow\n"
 		"\n"
 		"    -R RANDOM_SEED  set random seed\n"
@@ -50,9 +51,6 @@ static void usage()
 		"\n"
 		"    -f FLOW_SZ@WEIGHT flow size (byte) and its probablity\n"
 		"    -F FLOW_TXT       txt contains 'FLOWSIZE WEIGHT' per line\n"
-		"\n"
-		"    -i INTVAL@WEIGHT  interval (nsec) and its probablity\n"
-		"    -I INTVAL_TXT     txt contains 'INTERVAL WEIGHT' per line\n"
 		"\n"
 		"    When @ does not exist on -d/-f/-i values, weight is set to 1."
 		"\n\n",
@@ -110,12 +108,10 @@ static int parse_args(int argc, char **argv, struct opts *o)
 		return -1;
 	if ((o->flows = prob_list_alloc()) == NULL)
 		return -1;
-	if ((o->intervals = prob_list_alloc()) == NULL)
-		return -1;
 
 #define OPTSTR_COMMON "scp:B:q:b:vh"
 #define OPTSTR_SERVER "a:N:"
-#define OPTSTR_CLIENT "n:t:x:TR:CS:X:d:D:f:F:i:I:"
+#define OPTSTR_CLIENT "n:t:x:r:TR:CS:X:d:D:f:F:"
 #define OPTSTR OPTSTR_COMMON OPTSTR_SERVER OPTSTR_CLIENT
 
 	while ((ch = getopt(argc, argv, OPTSTR)) != -1) {
@@ -186,6 +182,13 @@ static int parse_args(int argc, char **argv, struct opts *o)
 				return -1;
 			}
 			break;
+                case 'r':
+                        o->tps_rate = atoi(optarg);
+                        if (o->tps_rate <= 0) {
+                                pr_err("invalid tps rate: %s", optarg);
+                                return -1;
+                        }
+                        break;
 		case 'T':
 			o->server_tcp_info = true;
 			break;
@@ -248,23 +251,6 @@ static int parse_args(int argc, char **argv, struct opts *o)
 			break;
 		case 'F':
 			if (prob_list_load_text(o->flows, optarg) < 0)
-				return -1;
-			break;
-
-		case 'i':
-			c = strrchr(optarg, '@');
-			if (c) {
-				*c = '\0';
-				p = atof(c+1);
-			} else  {
-				pr_info("no @ in '%s', set 1", optarg);
-				p = 1;
-			}
-			if (prob_list_append(o->intervals, p, optarg) < 0)
-				return -1;
-			break;
-		case 'I':
-			if (prob_list_load_text(o->intervals, optarg) < 0)
 				return -1;
 			break;
 
