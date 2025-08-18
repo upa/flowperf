@@ -7,13 +7,11 @@ and original message size distributions can be found
 [here](https://github.com/PlatformLab/HomaSimulation/tree/omnet_simulations/RpcTransportDesign/OMNeT%2B%2BSimulation/homatransport/sizeDistributions).
 
 ```console
-# SizeDistDir=[Path to a directory of https://github.com/PlatformLab/HomaSimulation/tree/omnet_simulations/RpcTransportDesign/OMNeT%2B%2BSimulation/homatransport/sizeDistributions]
-
-./cdf2pdf.py ${SizeDistDir}/FacebookKeyValue_Sampled.txt > fb-memcache
-./cdf2pdf.py ${SizeDistDir}/Google_SearchRPC.txt > google-search
-./cdf2pdf.py ${SizeDistDir}/Google_AllRPC.txt > google-all
-./cdf2pdf.py ${SizeDistDir}/Facebook_HadoopDist_All.txt > fb-hadoop
-./cdf2pdf.py ${SizeDistDir}/DCTCP_MsgSizeDist.txt --size-factor 1460 > dctcp
+./cdf2pdf.py original/FacebookKeyValue_Sampled.txt > fb-memcache
+./cdf2pdf.py original/Google_SearchRPC.txt > google-search
+./cdf2pdf.py original/Google_AllRPC.txt > google-all
+./cdf2pdf.py original/Facebook_HadoopDist_All.txt > fb-hadoop
+./cdf2pdf.py original/DCTCP_MsgSizeDist.txt --size-factor 1460 > dctcp
 ```
 
 `--size-factor` for DCTCP reflects [here](https://github.com/PlatformLab/HomaSimulation/blob/omnet_simulations/RpcTransportDesign/OMNeT%2B%2BSimulation/homatransport/sizeDistributions/adjustLoadFac.py#L95-L102).
