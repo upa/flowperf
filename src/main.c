@@ -45,6 +45,9 @@ static void usage()
 		"    -C              cache and reuse TCP connections\n"
                 "    -S START_TIME   specify start time by unixtime\n"
                 "    -X SAMPLE_RATE  sampling rate (0.0, 1.0]\n"
+                "\n"
+                "    -o              print results on the fly\n"
+                "    -O              print results in a short format\n"
 		"\n"
 		"    -d ADDR@WEIGHT    dest address and its probability\n"
 		"    -D ADDR_TXT       txt contains 'ADDR WEIGHT' per line\n"
@@ -111,7 +114,7 @@ static int parse_args(int argc, char **argv, struct opts *o)
 
 #define OPTSTR_COMMON "scp:B:q:b:vh"
 #define OPTSTR_SERVER "a:N:"
-#define OPTSTR_CLIENT "n:t:x:r:TR:CS:X:d:D:f:F:"
+#define OPTSTR_CLIENT "n:t:x:r:TR:CS:X:oOd:D:f:F:"
 #define OPTSTR OPTSTR_COMMON OPTSTR_SERVER OPTSTR_CLIENT
 
 	while ((ch = getopt(argc, argv, OPTSTR)) != -1) {
@@ -218,6 +221,14 @@ static int parse_args(int argc, char **argv, struct opts *o)
                                 pr_err("invalid sampling rate %s", optarg);
                                 return -1;
                         }
+                        break;
+
+                case 'o':
+                        o->fly_output = true;
+                        break;
+                        
+                case 'O':
+                        o->short_output = true;
                         break;
 
 		case 'd':

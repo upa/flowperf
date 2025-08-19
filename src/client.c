@@ -1,7 +1,5 @@
 /* client.c: flowperf client process  */
 
-#include "print.h"
-#include "prob.h"
 #include <netinet/in.h>
 #include <stdint.h>
 #include <string.h>
@@ -271,31 +269,42 @@ static void connection_handle_append(struct connection_handle *ch)
 	}
 }
 
-void print_connection_handle_result(FILE *fp, struct connection_handle *ch)
+void print_connection_handle_result(FILE *fp, struct connection_handle *ch,
+                                    bool short_format)
 {
 	char buf[512];
 	int ret;
 
-	ret = snprintf(buf, sizeof(buf),
-		       "state=%c "
-		       "dst=%s "
-		       "flow_size=%lu "
-		       "remain=%lu "
-		       "flowstart=%ld "
-		       "flowend=%ld "
-		       "time2conn=%lld "
-		       "time2flow=%lld "
-		       "tcp_c=%s",
-		       connection_handle_state_name(ch->state),
-		       ch->pa->addrstr,
-		       ch->pf->bytes,
-		       ch->remain_bytes,
-		       timespec_nsec(&ch->ts_flow_start),
-		       timespec_nsec(&ch->ts_flow_end),
-		       timespec_sub_nsec(&ch->ts_conn_end, &ch->ts_conn_start),
-		       timespec_sub_nsec(&ch->ts_flow_end, &ch->ts_flow_start),
-		       ch->tcp_info_c
-		);
+        if (short_format) {
+                ret = snprintf(buf, sizeof(buf),
+                               "%c size=%lu time2flow=%lld tcp_c=%s",
+                               connection_handle_state_name(ch->state),
+                               ch->pf->bytes,
+                               timespec_sub_nsec(&ch->ts_flow_end, &ch->ts_flow_start),
+                               ch->tcp_info_c
+                        );
+        } else {
+                ret = snprintf(buf, sizeof(buf),
+                               "state=%c "
+                               "dst=%s "
+                               "flow_size=%lu "
+                               "remain=%lu "
+                               "flowstart=%ld "
+                               "flowend=%ld "
+                               "time2conn=%lld "
+                               "time2flow=%lld "
+                               "tcp_c=%s",
+                               connection_handle_state_name(ch->state),
+                               ch->pa->addrstr,
+                               ch->pf->bytes,
+                               ch->remain_bytes,
+                               timespec_nsec(&ch->ts_flow_start),
+                               timespec_nsec(&ch->ts_flow_end),
+                               timespec_sub_nsec(&ch->ts_conn_end, &ch->ts_conn_start),
+                               timespec_sub_nsec(&ch->ts_flow_end, &ch->ts_flow_start),
+                               ch->tcp_info_c
+                        );
+        }
 
 	if (cli.o->server_tcp_info)
 		ret += snprintf(buf + ret, sizeof(buf) - ret,
@@ -310,7 +319,7 @@ static void print_result(FILE *fp)
 	struct connection_handle *ch;
 
 	for (ch = cli.first; ch != NULL; ch = ch->next) 
-		print_connection_handle_result(fp, ch);
+		print_connection_handle_result(fp, ch, cli.o->short_output);
 }
 
 struct timerfd_handle {
@@ -519,13 +528,18 @@ static void close_connection_handle(struct connection_handle *ch)
 	ch->send_buf = NULL;
 
         /* save this connection handle to the result list */
-        if (cli.o->sampling_rate == 0 ||
-            ((double)rand() / RAND_MAX) <= cli.o->sampling_rate) {
-                connection_handle_append(ch);
-        } else
+        if (cli.o->sampling_rate > 0 &&
+            ((double)rand() / RAND_MAX) > cli.o->sampling_rate)
+                goto skip_ch_result;
+
+        if (cli.o->fly_output) {
+                print_connection_handle_result(stdout, ch,
+                                               cli.o->short_output);
                 free(ch);
+        } else
+                connection_handle_append(ch);
 
-
+skip_ch_result:
 	if (cli.o->nr_flows) {
 		/* number of flows to be done is specified */
                 cli.nr_flows_done++;

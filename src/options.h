@@ -56,6 +56,9 @@ struct opts {
         time_t  start_time;     /* unixtime */
         double  sampling_rate;  /* rate between 0 and 1 */
 
+        bool    fly_output;     /* print result on-the-fly */
+        bool    short_output;
+
 	prob_list_t *addrs;
 	prob_list_t *flows;
 };
