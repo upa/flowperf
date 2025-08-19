@@ -145,11 +145,13 @@ void wait_until(time_t start_time)
         clock_gettime(CLOCK_REALTIME, &now);
 
         if (timespec_nsec(&now) < timespec_nsec(&target)) {
-                target.tv_sec -= 1;
-                target.tv_nsec += SEC_NS;
+                if (target.tv_nsec < now.tv_nsec) {
+                        target.tv_sec -= 1;
+                        target.tv_nsec += SEC_NS;
+                }
                 duration.tv_nsec = target.tv_nsec - now.tv_nsec;
                 duration.tv_sec = target.tv_sec - now.tv_sec;
-                nanosleep(&duration, NULL);
+                assert(nanosleep(&duration, NULL) == 0);
         }
 }
 
