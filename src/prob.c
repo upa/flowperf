@@ -46,7 +46,7 @@ int prob_list_append(prob_list_t *list, double prob_value, const char *key)
 	prob = &list->probs[list->size];
 	prob->probability = prob_value;
 	prob->data = NULL;
-	strncpy(prob->key, key, PROB_KEY_SIZE);
+	strlcpy(prob->key, key, PROB_KEY_SIZE);
 	
 	list->probs[++list->size].probability = -1; /* sentinel */
 	return 0;

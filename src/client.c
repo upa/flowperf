@@ -306,10 +306,11 @@ void print_connection_handle_result(FILE *fp, struct connection_handle *ch,
                         );
         }
 
-	if (cli.o->server_tcp_info)
+	if (cli.o->server_tcp_info) {
 		ret += snprintf(buf + ret, sizeof(buf) - ret,
 				" tcp_s=%s", ch->tcp_info_s);
-	snprintf(buf + ret, sizeof(buf) - 1, "\n");
+        }
+        strlcat(buf, "\n", sizeof(buf));
 
 	fputs(buf, fp);
 }
@@ -914,7 +915,10 @@ int start_client(struct opts *o)
 
         if (o->start_time) {
                 pr_notice("wait until %ld", o->start_time);
-                wait_until(o->start_time);
+                if (wait_until(o->start_time) != 0) {
+                        pr_err("wailt failed: %s", strerror(errno));
+                        return -1;
+                }
         }
 
 	start_running();

@@ -135,7 +135,7 @@ bool is_running(void)
 }
 
 /* wait with partial busy poll */
-void wait_until(time_t start_time)
+int wait_until(time_t start_time)
 {
         struct timespec now, target, duration;
 
@@ -151,8 +151,9 @@ void wait_until(time_t start_time)
                 }
                 duration.tv_nsec = target.tv_nsec - now.tv_nsec;
                 duration.tv_sec = target.tv_sec - now.tv_sec;
-                assert(nanosleep(&duration, NULL) == 0);
+                return nanosleep(&duration, NULL);
         }
+        return 0;
 }
 
 

@@ -47,7 +47,7 @@ bool is_running(void);
 
 
 /* wait (partial busy poll) until the specified time (unixtime) */
-void wait_until(time_t);
+int wait_until(time_t);
 
 /* stack of u64, for caching socket fds and pointers of send_buf */
 typedef struct u64_stack_struct {
