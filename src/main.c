@@ -38,7 +38,7 @@ static void usage()
 		"    -n NUMBER       number of flows to be done, default 0 (inifinit)\n"
 		"    -t DURATION     test duration (sec), default 10, 0 means inifnite\n"
 		"    -x CONCURRENCY  number of cunccurent flows, default 1\n"
-                "    -r RATE         specify rate in transaction/sec\n"
+                "    -r RATE         set target bit rate (bps)\n"
 		"    -T              get tcp_info from the server side for each flow\n"
 		"\n"
 		"    -R RANDOM_SEED  set random seed\n"
@@ -186,9 +186,9 @@ static int parse_args(int argc, char **argv, struct opts *o)
 			}
 			break;
                 case 'r':
-                        o->tps_rate = atoi(optarg);
-                        if (o->tps_rate <= 0) {
-                                pr_err("invalid tps rate: %s", optarg);
+                        o->bps_rate = atoi(optarg);
+                        if (o->bps_rate <= 0) {
+                                pr_err("invalid bps rate: %s", optarg);
                                 return -1;
                         }
                         break;

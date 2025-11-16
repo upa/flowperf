@@ -43,7 +43,10 @@
  * send bytes.
  */
 
-#define CONNECTION_HANDLE_STATE_FLOWING		2
+#define CONNECTION_HANDLE_STATE_START_FLOWING   2
+
+
+#define CONNECTION_HANDLE_STATE_FLOWING		3
 /* Benchmarking, receving data from the socket.
  *
  * Assumed Completion Event:
@@ -53,9 +56,9 @@
  *  by sending TCP_INFO or to WAIT
  */
    
-#define CONNECTION_HANDLE_STATE_WAIT_ACK	3
+#define CONNECTION_HANDLE_STATE_WAIT_ACK	4
 
-#define CONNECTION_HANDLE_STATE_INTERVAL	4
+#define CONNECTION_HANDLE_STATE_INTERVAL	5
 /* Sleep a while as flow interval time.
  *
  * Assumed Compeltion Event:
@@ -66,9 +69,9 @@
  */
 
 
-#define CONNECTION_HANDLE_STATE_DONE		5
+#define CONNECTION_HANDLE_STATE_DONE		6
 
-#define CONNECTION_HANDLE_STATE_TIMERFD         6
+#define CONNECTION_HANDLE_STATE_TIMERFD         7
 /* Special state for polling a timerfd */
 
 

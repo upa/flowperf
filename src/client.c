@@ -3,6 +3,7 @@
 #include <netinet/in.h>
 #include <stdint.h>
 #include <string.h>
+#include <limits.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/timerfd.h>
@@ -74,12 +75,13 @@ struct bucket {
 #define SEC_US          1000000
 #define WIN_PER_SEC     (SEC_US / WINDOW_US)
 
-void bucket_init(struct bucket *b, int tps)
+void bucket_init(struct bucket *b, int bps)
 {
 	b->window_us = WINDOW_US;
-	b->token_refill = (double)tps / (double)WIN_PER_SEC;
-        b->token_max = max(b->token_refill * WIN_PER_SEC, 1);
-	b->token = max(b->token_refill, 1);     /* start token */
+	b->token_refill = ((double)bps / 8.0) / (double)WIN_PER_SEC;
+        //b->token_max = max(b->token_refill * WIN_PER_SEC, cli.o->buf_sz);
+	b->token_max = INT_MAX;
+	b->token = max(b->token_refill, cli.o->buf_sz);     /* start token */
 
 	clock_gettime(CLOCK_MONOTONIC, &b->last);
 
@@ -87,13 +89,15 @@ void bucket_init(struct bucket *b, int tps)
                  b->window_us, b->token_max, b->token_refill);
 }
 
-time_t bucket_get_wait_duration(struct bucket *b)
+time_t bucket_get_wait_duration(struct bucket *b, double bytes)
 {
 	struct timespec now;
 	long long elapsed;
 
-	if (b->token >= 1) {
-		b->token -= 1;
+	pr_debug("token=%f, bytes=%f", b->token, bytes);
+
+	if (b->token >= bytes) {
+		b->token -= bytes;
 		return 0;
 	}
 
@@ -112,13 +116,13 @@ time_t bucket_get_wait_duration(struct bucket *b)
                 b->last = now;
         }
 
-	if (b->token >= 1) {
-		b->token -= 1;
+	if (b->token >= bytes) {
+		b->token -= bytes;
 		return 0;
 	}
 
 	/* no more token. wait until the next token is filled  */
-        return ((1.0 - b->token) / b->token_refill) * b->window_us * 1000;
+        return ((bytes - b->token) / b->token_refill) * b->window_us * 1000;
 }
 
 static struct bucket bucket;
@@ -220,6 +224,8 @@ struct connection_handle {
 	/* a handle for a connection to a server */
 	int	state;
 	int	sock;
+
+	int     state_next; /* next state after interval */
 
 	struct connection_handle *next;
 
@@ -376,9 +382,14 @@ static void process_timerfd_handle(struct timerfd_handle *tfd,
 
 
 
+static inline size_t send_size(struct connection_handle *ch)
+{
+	return min(ch->remain_bytes, cli.o->buf_sz);
+}
+
 static size_t prep_send_buf(struct connection_handle *ch)
 {
-	size_t send_sz = min(ch->remain_bytes, cli.o->buf_sz);
+	size_t send_sz = send_size(ch);
 
 	/* this byte may be other char on last flowing. clear it */
 	ch->send_buf[send_sz - 1] = '!';
@@ -401,6 +412,17 @@ static void post_write_flowing(struct connection_handle *ch)
 
 static void start_flowing(struct connection_handle *ch)
 {
+        if (cli.o->bps_rate) {
+                time_t wait = bucket_get_wait_duration(&bucket, ch->pf->bytes);
+                if (wait > 0) {
+                        pr_debug("timeout: wait time %ld", wait);
+                        ch->state = CONNECTION_HANDLE_STATE_INTERVAL;
+                        ch->state_next = CONNECTION_HANDLE_STATE_START_FLOWING;
+                        post_timeout(ring, &ch->e_timeout, wait);
+                        return;
+                }
+        }
+
 	pr_debug("%s: start flowing %lu bytes", ch->pa->addrstr, ch->pf->bytes);
 	ch->state = CONNECTION_HANDLE_STATE_FLOWING;
 	ch->remain_bytes = ch->pf->bytes;
@@ -563,7 +585,7 @@ static void process_connection_handle_connecting(struct connection_handle *ch,
 						 struct io_event *e,
 						 struct io_uring_cqe *cqe)
 {
-	assert(e->type == EVENT_TYPE_CONNECT);
+	assert(e->type == EVENT_TYPE_CONNECT || e->type == EVENT_TYPE_TIMEOUT);
 
 	/* handle is CONNECTION, and connect() completed. Start Flowing
 	 */
@@ -716,16 +738,6 @@ static void process_connection_handle_wait_ack(struct connection_handle *ch,
 	obtain_flow_end_time(ch);
         cli.nr_flows_success++;
 
-	if (cli.o->tps_rate) {
-                time_t wait = bucket_get_wait_duration(&bucket);
-                if (wait > 0) {
-                        pr_debug("timeout: wait time %ld", wait);
-                        ch->state = CONNECTION_HANDLE_STATE_INTERVAL;
-                        post_timeout(ring, &ch->e_timeout, wait);
-                        return;
-                }
-	}
-
 	/* nothing to do. close! */
 	ch->state = CONNECTION_HANDLE_STATE_DONE;
 
@@ -733,27 +745,20 @@ close:
 	close_connection_handle(ch);
 }
 
-static void process_connection_handle_interval(struct connection_handle *ch,
-					       struct io_event *e,
-					       struct io_uring_cqe *cqe)
+static int process_connection_handle_interval(struct connection_handle *ch,
+					      struct io_event *e,
+					      struct io_uring_cqe *cqe)
 {
 	assert(e->type == EVENT_TYPE_TIMEOUT);
 
-	if (cli.o->tps_rate) {
-                time_t wait = bucket_get_wait_duration(&bucket);
-                /* cannot obtain token, wait again */
-                if (wait > 0) {
-                        pr_debug("timeout again, wait time %ld", wait);
-                        ch->state = CONNECTION_HANDLE_STATE_INTERVAL;
-                        post_timeout(ring, &ch->e_timeout, wait);
-                        return;
-                }
+	switch (ch->state_next) {
+	case CONNECTION_HANDLE_STATE_START_FLOWING:
+		start_flowing(ch);
+		return 0;
 	}
 
-        pr_debug("interval handle done and released");
-
-	ch->state = CONNECTION_HANDLE_STATE_DONE;
-	close_connection_handle(ch);
+	pr_err("unintended state after interval!!");
+	return -1;
 }
 
 static void client_process_cqe(struct io_uring_cqe *cqe)
@@ -771,12 +776,13 @@ static void client_process_cqe(struct io_uring_cqe *cqe)
 	case CONNECTION_HANDLE_STATE_WAIT_ACK:
 		process_connection_handle_wait_ack(ch, e, cqe);
 		break;
-	case CONNECTION_HANDLE_STATE_INTERVAL:
-		process_connection_handle_interval(ch, e, cqe);
-		break;
         case CONNECTION_HANDLE_STATE_TIMERFD:
                 process_timerfd_handle((struct timerfd_handle *)ch, e, cqe);
                 break;
+	case CONNECTION_HANDLE_STATE_INTERVAL:
+		if (process_connection_handle_interval(ch, e, cqe) < 0)
+			return;
+		break;
 	default:
 		pr_err("invalid connection handle state: %d", ch->state);
 		close_connection_handle(ch);
@@ -869,8 +875,8 @@ int start_client(struct opts *o)
 	memset(&cli, 0, sizeof(cli));
 	cli.o = o;
 
-        if (cli.o->tps_rate)
-                bucket_init(&bucket, cli.o->tps_rate);
+        if (cli.o->bps_rate)
+                bucket_init(&bucket, cli.o->bps_rate);
 
 	if ((cli.send_buf_cache = u64_stack_alloc(cli.o->concurrency)) == NULL) {
 		pr_err("u64_stack_alloc: %s", strerror(errno));
@@ -905,7 +911,7 @@ int start_client(struct opts *o)
 		  cli.o->duration, cli.o->duration == 0 ? " (infinite)" : "");
 	pr_notice("number of flows to be done: %d%s",
 		  cli.o->nr_flows, cli.o->nr_flows == 0 ? " (infinite)" : "");
-        pr_notice("target rate: %d", cli.o->tps_rate);
+        pr_notice("target rate: %d", cli.o->bps_rate);
 
         if (cli.o->sampling_rate)
                 pr_notice("sampling rate: %f", cli.o->sampling_rate);
