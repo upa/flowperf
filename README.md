@@ -5,8 +5,8 @@
 perspective. A *flow* is a sequence of bytes (message) transferred
 from a source to a destination. `flowperf` generates flows and records
 the time required to complete each flow (Flow Completion Time, or
-FCT). Unlike other network performance tools that measures throughput
-of bulk transfers, `flowperf` focuses on FCT and transaction per
+FCT). Unlike other network performance tools that measure throughput
+of bulk transfers, `flowperf` focuses on FCT and transactions per
 second as key metrics.
 
 
@@ -23,7 +23,7 @@ state=d dst=127.0.0.1:9999 flow_size=1000 remain=0 start=1088621 end=1262950 tim
 state=d dst=127.0.0.1:9999 flow_size=1000 remain=0 start=1262950 end=1396132 time2conn=59843 time2flow=73339 tcp_c=lost=0,sack=0,retr=0,sego=3,segi=2
 ```
 
-flowperf provides following features:
+flowperf provides the following features:
 
 * Generate flows of different sizes based on weights (flow size
   distribution). Additionally, `flowperf` includes five predefined
@@ -34,16 +34,17 @@ flowperf provides following features:
   at Google, all workload in a Google data center, and web search with
   DCTCP.
 
-* Distribute flows among multiple `flowperf` servers according to
-  specified probabilities.
+* Distribute multiple flows among multiple `flowperf` servers
+  concurrently according to specified probabilities.
   
-* High performance, thanks to [io_uring](https://kernel.dk/io_uring.pdf).
+* One flowperf process runs on a single thread but is high performance,
+  thanks to [io_uring](https://kernel.dk/io_uring.pdf).
 
 
 
 ## Build and Install
 
-`flopwerf` uses io_uring, so it can only be build on Linux.
+`flowperf` uses io_uring, so it can only be built on Linux.
 
 ```console
 sudo apt install liburing-dev
@@ -67,12 +68,12 @@ Then, initiate a benchmark by running a flowperf client process.
 A *flow* in flowperf benchmarking consists of the following steps:
 
 1. A client connects to a server to establish a TCP connection.
-2. The client send bytes.
+2. The client sends bytes.
 3. The server responds with a single byte as an acknowledgment. 
 4. Upon receiving the acknowledgment, the client terminates the flow
    and closes the TCP connection.
 
-Several options cange the behavior, including:
+Several options change the behavior, for example:
 * `-C`: Reuse TCP connections.
 * `-T`: Retrieve TCP_INFO from the server instead of sending a one-byte acknowledgment.
 * `-x`: Generate multiple flows concurrently.
@@ -87,22 +88,22 @@ using multiple `-d` options like `-d 10.0.0.1 -d 10.0.0.2`. In this
 case, flows are distributed evenly between 10.0.0.1 and 10.0.0.2.
 Weight can be assigned using the `@WEIGHT` suffix: `-d 10.0.0.1@1 -d 10.0.0.2@3`.
 
-`-f` specifies the flow size, similar to `-d` option.  `-f 1000`
+`-f` specifies the flow size, similar to the `-d` option.  `-f 1000`
 generates 1000-byte flows, and `-f 1000@1 -f 20000@3` indicates that
 flows of 1000 bytes and 20000 bytes are transmitted in a 1:3 ratio.
 
 
 ## Examples
 
-* Generate 100B, 1000B, 10000B flows with uniform probability sending
-  them to both 10.0.0.1 and 10.0.0.2, using 16 concurrent TCP
+* Generate 100B, 1000B, and 10000B flows with uniform probability
+  sending them to both 10.0.0.1 and 10.0.0.2, using 16 concurrent TCP
   connections.
 
 ```console
 $ flowperf -c -d 10.0.0.1 -d 10.0.0.2 -f 100 -f 1000 -f 10000 -x 16
 ```
 
-* Generate flows following the size distribution of all workload in a
+* Generate flows following the size distribution of a workload in a
   Google data center.
 
 ```console
