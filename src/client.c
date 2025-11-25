@@ -413,7 +413,7 @@ static void post_write_flowing(struct connection_handle *ch)
 static void start_flowing(struct connection_handle *ch)
 {
         if (cli.o->bps_rate) {
-                time_t wait = bucket_get_wait_duration(&bucket, ch->pf->bytes);
+                time_t wait = bucket_get_wait_duration(&bucket, send_size(ch));
                 if (wait > 0) {
                         pr_debug("timeout: wait time %ld", wait);
                         ch->state = CONNECTION_HANDLE_STATE_INTERVAL;
@@ -425,7 +425,6 @@ static void start_flowing(struct connection_handle *ch)
 
 	pr_debug("%s: start flowing %lu bytes", ch->pa->addrstr, ch->pf->bytes);
 	ch->state = CONNECTION_HANDLE_STATE_FLOWING;
-	ch->remain_bytes = ch->pf->bytes;
 
 	/* we use sendmsg() for the first segment to get TX timestamp
 	 * that is the start time of the flow.
@@ -495,6 +494,7 @@ static int post_new_connect(void)
 
 	ch->pa = prob_list_pickup_data_uniformly(cli.o->addrs);
 	ch->pf = prob_list_pickup_data_uniformly(cli.o->flows);
+	ch->remain_bytes = ch->pf->bytes;
 
 	prob_addr_t *pa = ch->pa;
 
@@ -654,6 +654,17 @@ static void process_connection_handle_flowing(struct connection_handle *ch,
 		return;
 	}
 
+        if (cli.o->bps_rate) {
+                time_t wait = bucket_get_wait_duration(&bucket, send_size(ch));
+                if (wait > 0) {
+                        pr_debug("timeout: wait time %ld", wait);
+                        ch->state = CONNECTION_HANDLE_STATE_INTERVAL;
+                        ch->state_next = CONNECTION_HANDLE_STATE_FLOWING;
+                        post_timeout(ring, &ch->e_timeout, wait);
+                        return;
+                }
+        }
+
 	/* we need to send more bytes */
 	post_write_flowing(ch);
 }
@@ -753,7 +764,12 @@ static int process_connection_handle_interval(struct connection_handle *ch,
 
 	switch (ch->state_next) {
 	case CONNECTION_HANDLE_STATE_START_FLOWING:
+		ch->state = CONNECTION_HANDLE_STATE_START_FLOWING;
 		start_flowing(ch);
+		return 0;
+	case CONNECTION_HANDLE_STATE_FLOWING:
+		ch->state = CONNECTION_HANDLE_STATE_FLOWING;
+		post_write_flowing(ch);
 		return 0;
 	}
 
